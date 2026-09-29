@@ -464,6 +464,18 @@ class EventStreamingSettings(EnvBase):
     FF_V2_EVENT_STREAMING: bool = True
 
 
+class TenantSettings(EnvBase):
+    """PostgreSQL row-level security for tenant isolation.
+
+    Off by default. When on, every LangGraph pool checkout must run inside an
+    explicit tenant or system DB scope (see core.db_scope), and tenant-scoped
+    checkouts switch to AEGRA_TENANT_DB_ROLE so RLS policies apply.
+    """
+
+    AEGRA_TENANT_RLS_ENABLED: bool = False
+    AEGRA_TENANT_DB_ROLE: str = "aegra_tenant"
+
+
 class Settings:
     """Container object that instantiates all application settings groups."""
 
@@ -478,6 +490,7 @@ class Settings:
         self.cron = CronSettings()
         self.thread_ttl = ThreadTTLSettings()
         self.event_streaming = EventStreamingSettings()
+        self.tenant = TenantSettings()
 
 
 settings = Settings()

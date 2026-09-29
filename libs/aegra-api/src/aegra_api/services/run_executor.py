@@ -13,7 +13,9 @@ import structlog
 
 from aegra_api.core.active_runs import active_runs
 from aegra_api.core.auth_ctx import with_auth_ctx
+from aegra_api.core.db_scope import tenant_scope
 from aegra_api.core.redis_manager import redis_manager
+from aegra_api.core.tenant import tenant_id_for
 from aegra_api.models.run_job import RunJob
 from aegra_api.services.broker import broker_manager
 from aegra_api.services.event_streaming.native_stream import stream_native_v3_events
@@ -43,6 +45,17 @@ async def execute_run(job: RunJob) -> None:
     Handles the full lifecycle: status transitions, event streaming,
     interrupt detection, cancellation, and error signaling.
     """
+    # The one place a run picks its tenant; every DB access below, including
+    # tasks the graph spawns, inherits this scope.
+    tenant_id = tenant_id_for(job.user)
+    if tenant_id is None:
+        await _execute_run(job)
+        return
+    with tenant_scope(tenant_id):
+        await _execute_run(job)
+
+
+async def _execute_run(job: RunJob) -> None:
     run_id = job.identity.run_id
     thread_id = job.identity.thread_id
     user_id = job.user.identity

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi import HTTPException
 
+from aegra_api.core.db_scope import DbScope, DbScopeMissingError, current_db_scope, system_scope
 from aegra_api.services.cron_scheduler import CronScheduler
 
 # ---------------------------------------------------------------------------
@@ -24,6 +25,7 @@ def _make_cron_orm(
     assistant_id: str = "asst-001",
     thread_id: str | None = None,
     user_id: str = "test-user",
+    tenant_id: str | None = None,
     schedule: str = "*/5 * * * *",
     payload: dict[str, Any] | None = None,
     enabled: bool = True,
@@ -38,6 +40,7 @@ def _make_cron_orm(
     cron.assistant_id = assistant_id
     cron.thread_id = thread_id
     cron.user_id = user_id
+    cron.tenant_id = tenant_id
     cron.schedule = schedule
     cron.payload = payload if payload is not None else {"input": {"msg": "tick"}}
     cron.enabled = enabled
@@ -588,3 +591,100 @@ class TestSchedulerLoop:
             await scheduler._loop()
 
         assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Tenant RLS scoping
+# ---------------------------------------------------------------------------
+
+
+def _scope_or_none() -> DbScope | None:
+    try:
+        return current_db_scope()
+    except DbScopeMissingError:
+        return None
+
+
+class TestCronTenantScope:
+    """Crons are claimed as the system and fired as their own tenant."""
+
+    @staticmethod
+    def _maker() -> Mock:
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        return Mock(return_value=session)
+
+    @pytest.mark.asyncio
+    async def test_each_cron_fires_in_its_own_tenant_scope(self) -> None:
+        scheduler = CronScheduler()
+        crons = [
+            _make_cron_orm(cron_id="c-a", tenant_id="tenant-a"),
+            _make_cron_orm(cron_id="c-b", tenant_id="tenant-b"),
+        ]
+        seen: list[str | None] = []
+
+        async def record(_session: object, _cron: object) -> None:
+            scope = _scope_or_none()
+            seen.append(scope.tenant_id if scope else None)
+
+        with (
+            patch("aegra_api.services.cron_scheduler._get_session_maker", return_value=self._maker()),
+            patch.object(scheduler, "_find_due_crons", new_callable=AsyncMock, return_value=crons),
+            patch.object(scheduler, "_fire_cron", side_effect=record),
+            system_scope("test: scheduler loop"),
+        ):
+            await scheduler._tick()
+
+        assert seen == ["tenant-a", "tenant-b"]
+
+    @pytest.mark.asyncio
+    async def test_cron_without_tenant_keeps_system_scope(self) -> None:
+        scheduler = CronScheduler()
+        seen: list[DbScope | None] = []
+
+        async def record(_session: object, _cron: object) -> None:
+            seen.append(_scope_or_none())
+
+        with (
+            patch("aegra_api.services.cron_scheduler._get_session_maker", return_value=self._maker()),
+            patch.object(scheduler, "_find_due_crons", new_callable=AsyncMock, return_value=[_make_cron_orm()]),
+            patch.object(scheduler, "_fire_cron", side_effect=record),
+            system_scope("test: scheduler loop"),
+        ):
+            await scheduler._tick()
+
+        assert len(seen) == 1 and seen[0] is not None and seen[0].is_system
+
+    @pytest.mark.asyncio
+    async def test_fired_run_is_created_for_the_cron_tenant(self) -> None:
+        scheduler = CronScheduler()
+        cron = _make_cron_orm(tenant_id="tenant-a", thread_id="t-1")
+        cron.end_time = None
+
+        with patch(
+            "aegra_api.services.cron_scheduler._prepare_run",
+            new_callable=AsyncMock,
+            return_value=("run-1", Mock(), None),
+        ) as mock_prepare:
+            await scheduler._fire_cron(AsyncMock(), cron)
+
+        forged_user = mock_prepare.await_args.args[3]
+        assert forged_user.identity == "test-user"
+        assert forged_user.org_id == "tenant-a"
+
+    @pytest.mark.asyncio
+    async def test_loop_task_starts_in_system_scope(self) -> None:
+        scheduler = CronScheduler()
+        seen: list[DbScope | None] = []
+
+        async def record_loop() -> None:
+            seen.append(_scope_or_none())
+
+        with patch.object(scheduler, "_loop", side_effect=record_loop):
+            await scheduler.start()
+            await asyncio.sleep(0)
+            await scheduler.stop()
+
+        assert len(seen) == 1 and seen[0] is not None and seen[0].is_system
+        assert _scope_or_none() is None

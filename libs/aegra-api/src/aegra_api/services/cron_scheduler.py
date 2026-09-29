@@ -22,6 +22,7 @@ from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aegra_api.core.db_scope import system_scope, tenant_scope
 from aegra_api.core.orm import Cron as CronORM
 from aegra_api.core.orm import _get_session_maker
 from aegra_api.models import RunCreate, User
@@ -91,7 +92,8 @@ class CronScheduler:
     async def start(self) -> None:
         """Start the background polling task if the scheduler is enabled."""
         self._running = True
-        self._task = asyncio.create_task(self._loop())
+        with system_scope("cron scheduler: claim due crons; each fire re-scopes to its tenant"):
+            self._task = asyncio.create_task(self._loop())
         logger.info(
             "Cron scheduler started",
             interval_seconds=settings.cron.CRON_POLL_INTERVAL_SECONDS,
@@ -149,13 +151,17 @@ class CronScheduler:
         logger.info("Cron tick: found due jobs", count=len(due_crons))
 
         for cron in due_crons:
-            async with maker() as cron_session:
-                try:
-                    await self._fire_cron(cron_session, cron)
-                except Exception:
-                    logger.exception("Failed to fire cron job", cron_id=cron.cron_id)
-                    with contextlib.suppress(Exception):
-                        await cron_session.rollback()
+            # Fire as the cron's tenant. A cron without one stays in the system scope,
+            # where _prepare_run refuses to create a run under RLS.
+            fire_scope = tenant_scope(cron.tenant_id) if cron.tenant_id else contextlib.nullcontext()
+            with fire_scope:
+                async with maker() as cron_session:
+                    try:
+                        await self._fire_cron(cron_session, cron)
+                    except Exception:
+                        logger.exception("Failed to fire cron job", cron_id=cron.cron_id)
+                        with contextlib.suppress(Exception):
+                            await cron_session.rollback()
 
     @staticmethod
     async def _find_due_crons(session: AsyncSession, now: datetime) -> list[CronORM]:
@@ -190,6 +196,7 @@ class CronScheduler:
             identity=cron.user_id,
             display_name="cron-scheduler",
             is_authenticated=True,
+            org_id=cron.tenant_id,
         )
 
         try:

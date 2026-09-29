@@ -31,6 +31,7 @@ from aegra_api.core.auth_filters import build_metadata_filter
 from aegra_api.core.orm import Assistant as AssistantORM
 from aegra_api.core.orm import AssistantVersion as AssistantVersionORM
 from aegra_api.core.orm import get_session
+from aegra_api.core.tenant import tenant_id_for
 from aegra_api.models import Assistant, AssistantCreate, AssistantUpdate
 from aegra_api.models.auth import User
 from aegra_api.services.authenticated import Authenticated
@@ -215,11 +216,12 @@ class AssistantService(Authenticated):
                 context=context,
                 graph_id=graph_id,
                 user_id=self.user.identity,
+                tenant_id=tenant_id_for(self.user),
                 metadata_dict=metadata,
                 version=1,
             )
             # No conflict target: assistant_pkey, idx_assistant_user_assistant and
-            # idx_assistant_user_graph_config all have to yield the same outcome.
+            # idx_assistant_tenant_user_graph_config all have to yield the same outcome.
             .on_conflict_do_nothing()
             .returning(AssistantORM)
         )

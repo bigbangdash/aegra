@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegra_api.config import load_checkpointer_config
 from aegra_api.core.database import db_manager
+from aegra_api.core.db_scope import system_scope
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import ThreadTTL as ThreadTTLORM
@@ -316,7 +317,8 @@ class ThreadTTLSweeper:
     async def start(self) -> None:
         """Start the background sweep task."""
         self._running = True
-        self._task = asyncio.create_task(self._loop())
+        with system_scope("thread TTL sweeper: cross-tenant expiry"):
+            self._task = asyncio.create_task(self._loop())
         config = get_thread_ttl_config()
         logger.info(
             "Thread TTL sweeper started",

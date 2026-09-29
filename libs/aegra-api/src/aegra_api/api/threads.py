@@ -23,6 +23,7 @@ from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import ThreadTTL as ThreadTTLORM
 from aegra_api.core.orm import get_session
+from aegra_api.core.tenant import tenant_id_for, tenant_scope_dependency
 from aegra_api.models import (
     Thread,
     ThreadCheckpoint,
@@ -47,7 +48,7 @@ from aegra_api.services.thread_ttl import get_thread_ttl_config, prune_expired_t
 from aegra_api.utils.jsonb import jsonb_patch, jsonb_shallow_merge
 from aegra_api.utils.run_utils import strip_pinned_config_keys
 
-router = APIRouter(tags=["Threads"], dependencies=auth_dependency)
+router = APIRouter(tags=["Threads"], dependencies=[*auth_dependency, *tenant_scope_dependency])
 logger = structlog.getLogger(__name__)
 
 thread_state_service = ThreadStateService()
@@ -243,6 +244,7 @@ async def create_thread(
             status="idle",
             metadata_json=metadata,
             user_id=user.identity,
+            tenant_id=tenant_id_for(user),
         )
         .on_conflict_do_nothing(index_elements=["thread_id"])
         .returning(ThreadORM)

@@ -13,12 +13,14 @@ import structlog
 from asgi_correlation_id import correlation_id
 from fastapi import HTTPException
 from sqlalchemy import ColumnElement, case, func, literal_column, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegra_api.core.orm import Assistant as AssistantORM
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import _get_session_maker
+from aegra_api.core.tenant import tenant_id_for
 from aegra_api.models import Run, RunCreate, User
 from aegra_api.models.run_job import RunBehavior, RunExecution, RunIdentity, RunJob
 from aegra_api.services.executor import executor
@@ -137,6 +139,7 @@ async def update_thread_metadata(
     graph_id: str,
     *,
     user_id: str | None = None,
+    tenant_id: str | None = None,
     input_data: dict[str, Any] | None = None,
 ) -> None:
     """Update thread metadata with assistant and graph information.
@@ -165,14 +168,19 @@ async def update_thread_metadata(
             "thread_name": thread_name,
         }
 
-        thread_orm = ThreadORM(
-            thread_id=thread_id,
-            status="idle",
-            metadata_json=metadata,
-            user_id=user_id,
+        # thread_pkey is global while the read above is RLS-scoped, so a thread owned
+        # by another tenant looks absent; let the key arbitrate instead of 500ing.
+        created = await session.scalar(
+            pg_insert(ThreadORM)
+            .values(thread_id=thread_id, status="idle", metadata_json=metadata, user_id=user_id, tenant_id=tenant_id)
+            .on_conflict_do_nothing(index_elements=["thread_id"])
+            .returning(ThreadORM.thread_id)
         )
-        session.add(thread_orm)
-        return
+        if created is not None:
+            return
+        thread = await session.scalar(select(ThreadORM).where(ThreadORM.thread_id == thread_id))
+        if thread is None:
+            raise HTTPException(404, f"Thread '{thread_id}' not found")
 
     patches: list[ColumnElement[Any]] = [
         jsonb_patch({"assistant_id": str(assistant_id), "graph_id": graph_id}, "metadata_patch")
@@ -267,8 +275,15 @@ async def _prepare_run(
         raise HTTPException(404, f"Graph '{assistant.graph_id}' not found for assistant")
 
     # Mark thread as busy and update metadata
+    tenant_id = tenant_id_for(user)
     await update_thread_metadata(
-        session, thread_id, assistant.assistant_id, assistant.graph_id, user_id=user.identity, input_data=request.input
+        session,
+        thread_id,
+        assistant.assistant_id,
+        assistant.graph_id,
+        user_id=user.identity,
+        tenant_id=tenant_id,
+        input_data=request.input,
     )
     await set_thread_status(session, thread_id, "busy")
 
@@ -315,6 +330,7 @@ async def _prepare_run(
         config=config,
         context=context,
         user_id=user.identity,
+        tenant_id=tenant_id,
         created_at=now,
         updated_at=now,
         output=None,

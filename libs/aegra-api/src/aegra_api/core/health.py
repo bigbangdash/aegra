@@ -1,17 +1,27 @@
 """Health check endpoints"""
 
 import contextlib
+from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from aegra_api import __version__
 from aegra_api.core.database import db_manager
+from aegra_api.core.db_scope import system_scope
 from aegra_api.models.errors import UNAVAILABLE
 from aegra_api.settings import settings
 
-router = APIRouter(tags=["Health"])
+
+async def _probe_db_scope() -> AsyncIterator[None]:
+    # The probes suppress their own errors, so without a scope a refused
+    # checkout would still report "connected".
+    with system_scope("health probes"):
+        yield
+
+
+router = APIRouter(tags=["Health"], dependencies=[Depends(_probe_db_scope)])
 
 
 class HealthResponse(BaseModel):
