@@ -19,6 +19,15 @@ def test_resolve_tenant_id_rejects_user_without_org(org_id: str | None) -> None:
     assert exc_info.value.status_code == 403
 
 
+@pytest.mark.parametrize("org_id", ["org.a", "org a", "x" * 65])
+def test_resolve_tenant_id_rejects_malformed_org(org_id: str) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        resolve_tenant_id(User(identity="u1", org_id=org_id))
+
+    assert exc_info.value.status_code == 403
+    assert "org_id must match" in exc_info.value.detail
+
+
 def test_resolve_tenant_id_ignores_client_supplied_extra_fields() -> None:
     user = User(identity="u1", org_id="org-a", tenant_id="org-evil")
 

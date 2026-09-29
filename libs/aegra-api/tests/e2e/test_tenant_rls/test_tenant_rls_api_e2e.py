@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 import pytest
+import redis.asyncio as aioredis
 from langgraph_sdk import get_client
 
 from aegra_api.settings import settings
@@ -183,3 +184,36 @@ async def test_graph_store_writes_are_visible_to_own_tenant_through_http_api_onl
     assert mine["value"] == {"value": "from-graph"}
     assert mine["namespace"] == ["users", SHARED_USER, "graph", suffix]
     assert await _status_of(intruder.store.get_item(["graph", suffix], key="k")) == 404
+
+
+@pytest.mark.prod_only
+@pytest.mark.asyncio
+async def test_redis_event_buffer_holds_only_sealed_payloads() -> None:
+    marker = f"tenant-secret-{uuid.uuid4().hex}"
+    owner, intruder = _client(_tenant()), _client(_tenant())
+    assistant = await owner.assistants.create(graph_id="stress_test", if_exists="do_nothing")
+    thread = await owner.threads.create()
+    marked_input = {"messages": [{"role": "user", "content": json.dumps({"delay": 0.1, "steps": 2, "marker": marker})}]}
+    run = await owner.runs.create(thread["thread_id"], assistant["assistant_id"], input=marked_input)
+    await owner.runs.join(thread["thread_id"], run["run_id"])
+
+    # A terminal run replays only with a Last-Event-ID; one absent from the buffer replays everything.
+    replayed = [
+        part
+        async for part in owner.runs.join_stream(
+            thread["thread_id"], run["run_id"], last_event_id=f"{run['run_id']}_event_0"
+        )
+    ]
+    assert not any(part.event == "error" for part in replayed), replayed
+    assert any(marker in json.dumps(part.data) for part in replayed)
+
+    redis_client = aioredis.from_url(settings.redis.REDIS_URL, decode_responses=True)
+    try:
+        raw = await redis_client.lrange(f"{settings.redis.REDIS_CHANNEL_PREFIX}cache:{run['run_id']}", 0, -1)
+    finally:
+        await redis_client.aclose()
+    assert raw, "run left no replay buffer in Redis"
+    assert all(set(json.loads(item)) == {"event_id", "end", "sealed"} for item in raw)
+    assert not any(marker in item for item in raw)
+
+    assert await _status_of(intruder.runs.join(thread["thread_id"], run["run_id"])) == 404

@@ -91,3 +91,15 @@ def test_bind_scope_reenters_a_captured_scope_and_restores_previous() -> None:
     assert inner is captured
     with pytest.raises(DbScopeMissingError):
         current_db_scope()
+
+
+@pytest.mark.parametrize("tenant_id", ["tenant.a", "a/b", "a b", "a\x1fb", "ｔｅｎａｎｔ", "x" * 65])
+def test_tenant_scope_rejects_ids_outside_the_allowed_format(tenant_id: str) -> None:
+    with pytest.raises(ValueError, match="must match"), tenant_scope(tenant_id):
+        pass
+
+
+@pytest.mark.parametrize("tenant_id", ["org_2abcXYZ", "tenant-1", "A", "x" * 64])
+def test_tenant_scope_accepts_plain_ids(tenant_id: str) -> None:
+    with tenant_scope(tenant_id) as scope:
+        assert scope.tenant_id == tenant_id

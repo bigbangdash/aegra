@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from fastapi import Depends, HTTPException
 
 from aegra_api.core.auth_deps import get_current_user
-from aegra_api.core.db_scope import tenant_scope
+from aegra_api.core.db_scope import TENANT_ID_PATTERN, is_valid_tenant_id, tenant_scope
 from aegra_api.models.auth import User
 from aegra_api.settings import settings
 
@@ -16,6 +16,8 @@ def resolve_tenant_id(user: User) -> str:
     tenant_id = user.org_id
     if not tenant_id:
         raise HTTPException(403, "Tenant-scoped access requires an org_id on the authenticated user")
+    if not is_valid_tenant_id(tenant_id):
+        raise HTTPException(403, f"org_id must match {TENANT_ID_PATTERN.pattern}")
     return tenant_id
 
 
