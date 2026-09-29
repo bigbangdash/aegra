@@ -10,6 +10,8 @@ services:
       - AUTH_TYPE=custom
       - AEGRA_CONFIG=/app/aegra.tenant-rls.json
       - AEGRA_TENANT_RLS_ENABLED=${AEGRA_TENANT_RLS_ENABLED:-false}
+      # Test-only Redis payload key (base64 of a public 32-byte string). Never reuse outside E2E.
+      - AEGRA_TENANT_REDIS_MASTER_KEY=${AEGRA_TENANT_REDIS_MASTER_KEY:-YWVncmEtdGVuYW50LXJscy1lMmUtb25seS1rZXktMDE=}
       - PYTHONPATH=/app/src:/app/examples
     volumes:
       - ./aegra.tenant-rls.json:/app/aegra.tenant-rls.json:ro

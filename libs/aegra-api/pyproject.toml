@@ -57,6 +57,9 @@ dependencies = [
 
     # Cron expression parsing
     "croniter>=6.0.0",
+
+    # Per-tenant encryption of Redis event payloads (tenant RLS)
+    "cryptography>=44.0.0",
 ]
 
 [project.urls]

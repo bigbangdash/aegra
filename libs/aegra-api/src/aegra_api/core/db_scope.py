@@ -6,9 +6,18 @@ implicit bypass: forgetting to declare must fail closed.
 """
 
 import contextvars
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+
+# Tenant ids end up in store namespaces (dot-joined), AES-GCM associated data and
+# log lines, so only a plain token is accepted. Tighten once the IdP's format is known.
+TENANT_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def is_valid_tenant_id(tenant_id: str) -> bool:
+    return TENANT_ID_PATTERN.fullmatch(tenant_id) is not None
 
 
 class DbScopeMissingError(RuntimeError):
@@ -39,8 +48,8 @@ def current_db_scope() -> DbScope:
 
 @contextmanager
 def tenant_scope(tenant_id: str) -> Iterator[DbScope]:
-    if not tenant_id:
-        raise ValueError("tenant_id must be a non-empty string")
+    if not tenant_id or not is_valid_tenant_id(tenant_id):
+        raise ValueError(f"tenant_id must match {TENANT_ID_PATTERN.pattern}: {tenant_id!r}")
     scope = DbScope(tenant_id=tenant_id)
     token = _db_scope.set(scope)
     try:

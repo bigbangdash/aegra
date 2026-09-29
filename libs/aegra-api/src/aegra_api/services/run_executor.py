@@ -11,7 +11,7 @@ from typing import Any
 
 import structlog
 
-from aegra_api.core.active_runs import active_runs
+from aegra_api.core.active_runs import active_run_tenants, active_runs
 from aegra_api.core.auth_ctx import with_auth_ctx
 from aegra_api.core.db_scope import tenant_scope
 from aegra_api.core.redis_manager import redis_manager
@@ -51,8 +51,13 @@ async def execute_run(job: RunJob) -> None:
     if tenant_id is None:
         await _execute_run(job)
         return
+    run_id = job.identity.run_id
     with tenant_scope(tenant_id):
-        await _execute_run(job)
+        active_run_tenants[run_id] = tenant_id
+        try:
+            await _execute_run(job)
+        finally:
+            active_run_tenants.pop(run_id, None)
 
 
 async def _execute_run(job: RunJob) -> None:

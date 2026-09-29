@@ -22,7 +22,7 @@ from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aegra_api.core.db_scope import system_scope, tenant_scope
+from aegra_api.core.db_scope import is_valid_tenant_id, system_scope, tenant_scope
 from aegra_api.core.orm import Cron as CronORM
 from aegra_api.core.orm import _get_session_maker
 from aegra_api.models import RunCreate, User
@@ -151,6 +151,11 @@ class CronScheduler:
         logger.info("Cron tick: found due jobs", count=len(due_crons))
 
         for cron in due_crons:
+            # Rows saved before tenant ids were validated would make tenant_scope raise
+            # and abort the whole batch; skip just that cron.
+            if cron.tenant_id and not is_valid_tenant_id(cron.tenant_id):
+                logger.error("Skipping cron with a malformed tenant_id", cron_id=cron.cron_id)
+                continue
             # Fire as the cron's tenant. A cron without one stays in the system scope,
             # where _prepare_run refuses to create a run under RLS.
             fire_scope = tenant_scope(cron.tenant_id) if cron.tenant_id else contextlib.nullcontext()

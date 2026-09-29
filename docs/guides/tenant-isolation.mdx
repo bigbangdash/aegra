@@ -1,0 +1,59 @@
+---
+title: "Tenant isolation"
+description: "Isolate tenants at the database level with PostgreSQL row-level security."
+---
+
+With `AEGRA_TENANT_RLS_ENABLED=true`, every request and background run acts for exactly one tenant, and PostgreSQL row-level security (RLS) rejects rows that belong to another tenant. A bug that forgets a `WHERE` clause returns nothing instead of another tenant's data.
+
+<Warning>
+This feature is experimental. It protects against application bugs that cross tenant boundaries. It does not protect against a compromised server process, which holds the database credentials and the Redis key.
+</Warning>
+
+## What is isolated
+
+| Data | Mechanism |
+|------|-----------|
+| Threads, runs, crons | RLS on `tenant_id` |
+| Assistants | RLS per tenant, plus shared read-only rows for the graphs in `aegra.json` |
+| Checkpoints and the store (LangGraph pool) | RLS on `tenant_id`; store namespaces get a hidden per-tenant prefix, so two tenants can use the same namespace and key |
+| Redis event buffer and pub/sub | AES-256-GCM with a per-tenant key, bound to the tenant, run and event ids |
+
+## Where the tenant comes from
+
+The tenant is the authenticated user's `org_id`, set by your [auth handler](/guides/authentication) from a verified identity. Clients cannot choose it. Requests from a user without an `org_id`, or with one that does not match `^[A-Za-z0-9_-]{1,64}$`, get `403`.
+
+## Setup
+
+<Steps>
+  <Step title="Configure">
+    ```bash
+    AEGRA_TENANT_RLS_ENABLED=true
+    # Only with REDIS_BROKER_ENABLED=true:
+    AEGRA_TENANT_REDIS_MASTER_KEY=$(openssl rand -base64 32)
+    ```
+    With the Redis broker on and no key, the server refuses to start.
+  </Step>
+  <Step title="Start the server once">
+    Startup runs migrations and creates the LangGraph tables. RLS must be enabled after that, because it covers those tables too.
+  </Step>
+  <Step title="Enable RLS">
+    ```bash
+    aegra db enable-tenant-rls
+    ```
+    Run it as the role the server logs in as, or as a superuser with `--app-role <server login role>`. It creates the tenant role and grants it to that login role. It is safe to re-run.
+  </Step>
+</Steps>
+
+Start with a new database. Existing rows have no `tenant_id`, and there is no backfill.
+
+<Note>
+The server's login role must own the tables, which is the default when the server creates them through migrations. Background jobs such as the lease reaper and the thread TTL sweeper run as that role across all tenants and rely on the owner not being subject to RLS. If the login role does not own the tables and lacks `BYPASSRLS`, those jobs see no rows.
+</Note>
+
+## Operational notes
+
+- **Semantic search added later.** The `store_vectors` table only exists once semantic search is configured. Re-run `aegra db enable-tenant-rls` after enabling it.
+- **Do not turn the flag off after enabling RLS.** The policies make `tenant_id` required, and a server with the flag off cannot fill it, so writes fail.
+- **Switching the flag with the Redis broker on.** Redis keeps each run's replay buffer for 10 minutes. Events written before the switch fail to decrypt after it (unsealed with the flag on, sealed with it off), and streams reading them stop with an error. Wait until no runs are active, then 10 more minutes, before switching.
+- **Custom key storage.** To keep tenant keys in a KMS instead of deriving them from one master key, call `aegra_api.core.tenant_crypto.configure_key_provider()` at import time, for example from the module your `http.app` points to. The startup check runs before your app's lifespan, so configuring the provider there is too late.
+- **Background jobs.** The cron scheduler fires each cron as its owning tenant. A cron whose stored `tenant_id` no longer passes validation is skipped and logged instead of stopping the rest of the batch.

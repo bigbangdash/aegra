@@ -180,6 +180,29 @@ class TestSchedulerTick:
             await scheduler._tick()
             assert call_count == 2
 
+    @pytest.mark.asyncio
+    async def test_tick_skips_cron_with_malformed_tenant_and_fires_the_rest(self) -> None:
+        # A legacy row whose tenant_id fails validation must not abort the batch.
+        scheduler = CronScheduler()
+        bad = _make_cron_orm(cron_id="bad", tenant_id="tenant.with.dots")
+        good = _make_cron_orm(cron_id="good", tenant_id="tenant-b")
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        fired: list[str] = []
+
+        async def _record(_session: Any, cron: Any) -> None:
+            fired.append(cron.cron_id)
+
+        with (
+            patch("aegra_api.services.cron_scheduler._get_session_maker", return_value=Mock(return_value=mock_session)),
+            patch.object(scheduler, "_find_due_crons", new_callable=AsyncMock, return_value=[bad, good]),
+            patch.object(scheduler, "_fire_cron", side_effect=_record),
+        ):
+            await scheduler._tick()
+
+        assert fired == ["good"]
+
 
 # ---------------------------------------------------------------------------
 # _tick (continued — tests added after class TestTick)

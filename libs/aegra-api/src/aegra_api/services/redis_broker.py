@@ -19,9 +19,11 @@ from typing import Any
 import structlog
 from redis import RedisError
 
-from aegra_api.core.active_runs import active_runs, explicit_run_cancellations
+from aegra_api.core.active_runs import active_run_tenants, active_runs, explicit_run_cancellations
+from aegra_api.core.db_scope import DbScopeMissingError, tenant_scope
 from aegra_api.core.redis_manager import redis_manager
 from aegra_api.core.serializers import GeneralSerializer
+from aegra_api.core.tenant_crypto import TenantPayloadError, encryption_tenant, get_key_provider, open_sealed, seal
 from aegra_api.models.enums import RunCancellationAction
 from aegra_api.services.base_broker import REPLAY_RETENTION_SECONDS, BaseBrokerManager, BaseRunBroker
 from aegra_api.settings import settings
@@ -66,6 +68,17 @@ def _deserialize_payload(raw: Any) -> Any:
     return raw
 
 
+def _is_end_payload(payload: Any) -> bool:
+    return isinstance(payload, tuple) and len(payload) >= 1 and payload[0] == "end"
+
+
+def _message_is_end(data: dict[str, Any]) -> bool:
+    # Sealed messages carry the end marker in clear so the broker can stop without a key.
+    if "sealed" in data:
+        return data.get("end") is True
+    return _is_end_payload(_deserialize_payload(data["payload"]))
+
+
 def _backoff_delay(attempt: int) -> float:
     """Calculate exponential backoff delay with jitter."""
     delay = min(_BACKOFF_BASE * (_BACKOFF_FACTOR**attempt), _BACKOFF_MAX)
@@ -105,14 +118,8 @@ class RedisRunBroker(BaseRunBroker):
             logger.warning(f"Attempted to put event {event_id} into finished broker for run {self.run_id}")
             return
 
-        message = json.dumps(
-            {
-                "event_id": event_id,
-                "payload": json.loads(_serialize_payload(payload)),
-            }
-        )
-
-        is_end = isinstance(payload, tuple) and len(payload) >= 1 and payload[0] == "end"
+        is_end = _is_end_payload(payload)
+        message = await self._encode_message(event_id, payload, is_end=is_end)
 
         async with self._write_lock:
             # Cache and publish are retried independently so a publish failure
@@ -136,6 +143,27 @@ class RedisRunBroker(BaseRunBroker):
                 # rather than looping forever waiting for an end event that won't arrive.
                 if is_end:
                     self._finished = True
+
+    async def _encode_message(self, event_id: str, payload: Any, *, is_end: bool) -> str:
+        body = _serialize_payload(payload)
+        tenant_id = encryption_tenant()
+        if tenant_id is None:
+            return json.dumps({"event_id": event_id, "payload": json.loads(body)})
+        sealed = await seal(get_key_provider(), tenant_id, self.run_id, event_id, body.encode())
+        return json.dumps({"event_id": event_id, "end": is_end, "sealed": sealed})
+
+    async def _decode_payload(self, data: dict[str, Any]) -> Any:
+        # The reader's own scope picks the key, so a run fetched under the wrong tenant fails to open.
+        tenant_id = encryption_tenant()
+        sealed = data.get("sealed")
+        if tenant_id is None:
+            if sealed is not None:
+                raise TenantPayloadError(f"sealed event for run {self.run_id} but tenant RLS is off")
+            return _deserialize_payload(data["payload"])
+        if sealed is None:
+            raise TenantPayloadError(f"unsealed event for run {self.run_id} while tenant RLS is on")
+        plaintext = await open_sealed(get_key_provider(), tenant_id, self.run_id, data["event_id"], sealed)
+        return _deserialize_payload(json.loads(plaintext))
 
     async def _cache_event(self, message: str) -> None:
         """Append the event to the replay buffer and bump the sequence counter."""
@@ -231,11 +259,11 @@ class RedisRunBroker(BaseRunBroker):
                     continue
                 last_yielded_event_id = event_id
 
-                payload = _deserialize_payload(data["payload"])
+                payload = await self._decode_payload(data)
 
                 yield event_id, payload
 
-                if isinstance(payload, tuple) and len(payload) >= 1 and payload[0] == "end":
+                if _message_is_end(data):
                     self._finished = True
                     break
         finally:
@@ -251,12 +279,9 @@ class RedisRunBroker(BaseRunBroker):
         try:
             client = redis_manager.get_client()
             raw_messages = await client.lrange(self._cache_key, -1, -1)  # type: ignore[invalid-await]
-            if raw_messages:
-                data = json.loads(raw_messages[0])
-                payload = _deserialize_payload(data["payload"])
-                if isinstance(payload, tuple) and len(payload) >= 1 and payload[0] == "end":
-                    self._finished = True
-                    return True
+            if raw_messages and _message_is_end(json.loads(raw_messages[0])):
+                self._finished = True
+                return True
         except RedisError as e:
             logger.warning(f"Failed checking replay buffer for end event for run {self.run_id}: {e}")
         return False
@@ -289,7 +314,7 @@ class RedisRunBroker(BaseRunBroker):
                 continue
             prev_event_id = event_id
 
-            payload = _deserialize_payload(data["payload"])
+            payload = await self._decode_payload(data)
             all_events.append((event_id, payload))
 
             if not found_last:
@@ -487,13 +512,20 @@ class RedisBrokerManager(BaseBrokerManager):
         task.cancel()
 
         broker = self.get_or_create_broker(run_id)
-        if emit_end_event and not broker.is_finished():
-            event_id = await self.allocate_event_id(run_id)
-            await broker.put(event_id, ("end", {"status": "interrupted"}))
-            # Do NOT call cleanup_broker here - execute_run's finally block
-            # owns cleanup.  Leaving the finished broker in _brokers lets
-            # signal_run_cancelled see is_finished() → True and skip the
-            # duplicate end event.
+        if not emit_end_event or broker.is_finished():
+            return
+        tenant_id = active_run_tenants.get(run_id)
+        try:
+            with tenant_scope(tenant_id) if tenant_id else contextlib.nullcontext():
+                event_id = await self.allocate_event_id(run_id)
+                await broker.put(event_id, ("end", {"status": "interrupted"}))
+                # Do NOT call cleanup_broker here - execute_run's finally block
+                # owns cleanup.  Leaving the finished broker in _brokers lets
+                # signal_run_cancelled see is_finished() → True and skip the
+                # duplicate end event.
+        except (TenantPayloadError, DbScopeMissingError) as e:
+            # The cancelled run's own finally path still emits its end event under its tenant.
+            logger.warning(f"Cancel listener could not write the end event for run {run_id}: {e}")
 
     async def start_cleanup_task(self) -> None:
         """No-op. Redis TTL handles replay buffer expiry."""

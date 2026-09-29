@@ -73,7 +73,8 @@
               "guides/observability",
               "guides/deployment",
               "guides/worker-architecture",
-              "guides/high-availability"
+              "guides/high-availability",
+              "guides/tenant-isolation"
             ]
           },
           {

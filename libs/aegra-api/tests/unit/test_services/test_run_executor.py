@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from aegra_api.core.active_runs import active_run_tenants
 from aegra_api.core.db_scope import DbScope, DbScopeMissingError, current_db_scope, system_scope
 from aegra_api.models.auth import User
 from aegra_api.models.run_job import RunExecution, RunIdentity, RunJob
@@ -516,6 +517,23 @@ class TestExecuteRunTenantScope:
             await execute_run(self._scoped_job("tenant-b"))
 
         assert seen[0] is not None and seen[0].tenant_id == "tenant-b"
+
+    @pytest.mark.asyncio
+    async def test_run_tenant_is_registered_only_while_running(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The cancel listener reads this to write the end event under the run's own tenant.
+        monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_RLS_ENABLED", True)
+        job = self._scoped_job("tenant-a")
+        seen: list[str | None] = []
+
+        async def record(_job: RunJob) -> None:
+            seen.append(active_run_tenants.get(job.identity.run_id))
+            raise RuntimeError("boom")
+
+        with patch.object(run_executor_module, "_execute_run", side_effect=record), pytest.raises(RuntimeError):
+            await execute_run(job)
+
+        assert seen == ["tenant-a"]
+        assert job.identity.run_id not in active_run_tenants
 
     @pytest.mark.asyncio
     async def test_job_without_org_is_refused_when_rls_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
