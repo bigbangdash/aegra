@@ -1,5 +1,7 @@
 """Database manager with LangGraph integration"""
 
+from typing import Any
+
 import structlog
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres.aio import AsyncPostgresStore
@@ -8,6 +10,9 @@ from psycopg_pool import AsyncConnectionPool
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from aegra_api.config import load_store_config
+from aegra_api.core.db_scope import system_scope
+from aegra_api.core.tenant_pool import TenantScopedConnectionPool
+from aegra_api.core.tenant_store import TenantScopedPostgresStore
 from aegra_api.settings import settings
 
 logger = structlog.get_logger(__name__)
@@ -52,14 +57,18 @@ class DatabaseManager:
 
         # Create a single shared pool.
         # 'open=False' is important to avoid RuntimeWarning; we open it explicitly below.
-        self.lg_pool = AsyncConnectionPool(
-            conninfo=settings.db.database_url_sync,
-            min_size=settings.pool.LANGGRAPH_MIN_POOL_SIZE,
-            max_size=lg_max,
-            open=False,
-            kwargs=lg_kwargs,
-            check=AsyncConnectionPool.check_connection,
-        )
+        pool_args: dict[str, Any] = {
+            "conninfo": settings.db.database_url_sync,
+            "min_size": settings.pool.LANGGRAPH_MIN_POOL_SIZE,
+            "max_size": lg_max,
+            "open": False,
+            "kwargs": lg_kwargs,
+            "check": AsyncConnectionPool.check_connection,
+        }
+        if settings.tenant.AEGRA_TENANT_RLS_ENABLED:
+            self.lg_pool = TenantScopedConnectionPool(**pool_args, tenant_role=settings.tenant.AEGRA_TENANT_DB_ROLE)
+        else:
+            self.lg_pool = AsyncConnectionPool(**pool_args)
 
         # Explicitly open the pool
         await self.lg_pool.open()
@@ -69,15 +78,16 @@ class DatabaseManager:
 
         logger.info(f"Initializing LangGraph components with shared pool (max {lg_max} conns)...")
 
-        self._checkpointer = AsyncPostgresSaver(conn=self.lg_pool)
-        await self._checkpointer.setup()  # Ensure tables exist
-
         # Load store configuration for semantic search (if configured)
         store_config = load_store_config()
         index_config = store_config.get("index") if store_config else None
 
-        self._store = AsyncPostgresStore(conn=self.lg_pool, index=index_config)
-        await self._store.setup()  # Ensure tables exist
+        self._checkpointer = AsyncPostgresSaver(conn=self.lg_pool)
+        store_cls = TenantScopedPostgresStore if settings.tenant.AEGRA_TENANT_RLS_ENABLED else AsyncPostgresStore
+        self._store = store_cls(conn=self.lg_pool, index=index_config)
+        with system_scope("LangGraph schema setup at startup"):
+            await self._checkpointer.setup()  # Ensure tables exist
+            await self._store.setup()  # Ensure tables exist
 
         if index_config:
             embed_model = index_config.get("embed", "unknown")

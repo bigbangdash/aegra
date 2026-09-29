@@ -15,6 +15,7 @@ from fastapi import APIRouter, Body, Depends, Query
 
 from aegra_api.core.auth_deps import auth_dependency
 from aegra_api.core.orm import Assistant as AssistantORM
+from aegra_api.core.tenant import tenant_scope_dependency
 from aegra_api.models import (
     AgentSchemas,
     Assistant,
@@ -26,7 +27,7 @@ from aegra_api.models import (
 from aegra_api.models.errors import CONFLICT, NOT_FOUND
 from aegra_api.services.assistant_service import AssistantService, get_assistant_service
 
-router = APIRouter(tags=["Assistants"], dependencies=auth_dependency)
+router = APIRouter(tags=["Assistants"], dependencies=[*auth_dependency, *tenant_scope_dependency])
 
 
 def _resolve_sort(request: AssistantSearchRequest) -> tuple[object, bool]:

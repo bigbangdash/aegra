@@ -1,0 +1,24 @@
+# Tenant RLS E2E override — header-trusting test auth, RLS flag from the shell.
+# Usage (flag off for a baseline, on for the RLS run; same stack either way):
+#   AEGRA_TENANT_RLS_ENABLED=true docker compose -f docker-compose.yml \
+#     -f docker-compose.dev.yml -f docker-compose.tenant-rls.yml up -d
+# Then run the operator enable step (aegra_api.core.tenant_rls) once.
+
+services:
+  aegra:
+    environment:
+      - AUTH_TYPE=custom
+      - AEGRA_CONFIG=/app/aegra.tenant-rls.json
+      - AEGRA_TENANT_RLS_ENABLED=${AEGRA_TENANT_RLS_ENABLED:-false}
+      - PYTHONPATH=/app/src:/app/examples
+    volumes:
+      - ./aegra.tenant-rls.json:/app/aegra.tenant-rls.json:ro
+
+  # Host ports moved off 5432/6379 so this stack can run beside other local services.
+  redis:
+    ports: !override
+      - "6380:6379"
+
+  postgres:
+    ports: !override
+      - "5434:5432"

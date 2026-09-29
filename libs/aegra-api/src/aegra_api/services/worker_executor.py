@@ -22,6 +22,7 @@ from redis import RedisError
 from sqlalchemy import select, update
 
 from aegra_api.core.active_runs import active_runs, explicit_run_cancellations
+from aegra_api.core.db_scope import system_scope
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import _get_session_maker
 from aegra_api.core.redis_manager import redis_manager
@@ -151,7 +152,9 @@ class WorkerExecutor(BaseExecutor):
             )
         for idx in range(count):
             name = f"{self._instance_id}-worker-{idx}"
-            task = asyncio.create_task(self._worker_loop(name))
+            # Queue and lease bookkeeping is cross-tenant; execute_run re-scopes each job.
+            with system_scope("worker loop: queue and lease management"):
+                task = asyncio.create_task(self._worker_loop(name))
             self._worker_tasks.append(task)
 
         max_concurrent = count * settings.worker.N_JOBS_PER_WORKER
@@ -193,7 +196,8 @@ class WorkerExecutor(BaseExecutor):
             await asyncio.gather(*self._worker_tasks, return_exceptions=True)
 
         if drained:
-            await _requeue_drained_runs(drained)
+            with system_scope("worker shutdown: requeue drained runs"):
+                await _requeue_drained_runs(drained)
 
         self._worker_tasks.clear()
         self._job_tasks.clear()

@@ -6,6 +6,8 @@ verifying HTTP status codes, request validation, and delegation behaviour.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlalchemy import Insert
+
 from tests.fixtures.clients import create_test_app, make_client
 from tests.fixtures.database import DummySessionBase
 from tests.fixtures.session_fixtures import BasicSession, override_session_dependency
@@ -192,6 +194,9 @@ class TestStatelessWaitForRun:
                     return assistant
                 if "from run" in stmt_str:
                     return run
+                # The thread auto-create is INSERT ... RETURNING thread_id.
+                if isinstance(stmt, Insert):
+                    return stmt.compile().params["thread_id"]
                 return None
 
             async def refresh(self, obj: object) -> None:

@@ -21,6 +21,7 @@ import structlog
 from sqlalchemy import (
     TIMESTAMP,
     Boolean,
+    FetchedValue,
     Float,
     ForeignKey,
     Index,
@@ -30,9 +31,11 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Dialect
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, declarative_base, mapped_column
 from sqlalchemy.types import TypeDecorator
+
+from aegra_api.core.tenant_session import session_class_for_settings
 
 _logger = structlog.getLogger(__name__)
 
@@ -102,6 +105,8 @@ class Assistant(Base):
     config: Mapped[dict] = mapped_column(JsonbSafe, server_default=text("'{}'::jsonb"))
     context: Mapped[dict] = mapped_column(JsonbSafe, server_default=text("'{}'::jsonb"))
     user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # NULL only for shared system assistants (enforced by the RLS enable step).
+    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=FetchedValue())
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     metadata_dict: Mapped[dict] = mapped_column(JsonbSafe, server_default=text("'{}'::jsonb"), name="metadata")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
@@ -111,8 +116,11 @@ class Assistant(Base):
     __table_args__ = (
         Index("idx_assistant_user", "user_id"),
         Index("idx_assistant_user_assistant", "user_id", "assistant_id", unique=True),
+        Index("idx_assistant_tenant_id", "tenant_id"),
+        # Per tenant: the same user id in two tenants may hold identical assistants.
         Index(
-            "idx_assistant_user_graph_config",
+            "idx_assistant_tenant_user_graph_config",
+            text("COALESCE(tenant_id, '')"),
             "user_id",
             "graph_id",
             text("md5(config::text)"),
@@ -145,11 +153,17 @@ class Thread(Base):
     # Database column is 'metadata_json' (per database.py). ORM attribute 'metadata_json' must map to that column.
     metadata_json: Mapped[dict] = mapped_column("metadata_json", JsonbSafe, server_default=text("'{}'::jsonb"))
     user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # Set only when AEGRA_TENANT_RLS_ENABLED; NOT NULL and the scope default come from the
+    # RLS enable step. FetchedValue keeps an unset attribute out of INSERT so that default applies.
+    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=FetchedValue())
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
 
     # Indexes for performance
-    __table_args__ = (Index("idx_thread_user", "user_id"),)
+    __table_args__ = (
+        Index("idx_thread_user", "user_id"),
+        Index("idx_thread_tenant_id", "tenant_id"),
+    )
 
 
 class Run(Base):
@@ -168,6 +182,7 @@ class Run(Base):
     output: Mapped[dict | None] = mapped_column(JsonbSafe)
     error_message: Mapped[str | None] = mapped_column(Text)
     user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=FetchedValue())
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
 
@@ -185,6 +200,7 @@ class Run(Base):
     __table_args__ = (
         Index("idx_runs_thread_id", "thread_id"),
         Index("idx_runs_user", "user_id"),
+        Index("idx_runs_tenant_id", "tenant_id"),
         Index("idx_runs_status", "status"),
         Index("idx_runs_assistant_id", "assistant_id"),
         Index("idx_runs_created_at", "created_at"),
@@ -204,6 +220,7 @@ class Cron(Base):
         Text, ForeignKey("thread.thread_id", ondelete="CASCADE"), nullable=True
     )
     user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=FetchedValue())
     schedule: Mapped[str] = mapped_column(Text, nullable=False)
     # JsonbSafe strips NULL bytes from user payloads — same protection as runs.input.
     payload: Mapped[dict] = mapped_column(JsonbSafe, server_default=text("'{}'::jsonb"))
@@ -218,6 +235,7 @@ class Cron(Base):
 
     __table_args__ = (
         Index("idx_cron_user", "user_id"),
+        Index("idx_crons_tenant_id", "tenant_id"),
         Index("idx_cron_assistant_id", "assistant_id"),
         Index("idx_cron_thread_id", "thread_id"),
         Index("idx_cron_next_run", "enabled", "next_run_date"),
@@ -250,8 +268,12 @@ def get_session_maker() -> async_sessionmaker[AsyncSession]:
         from aegra_api.core.database import db_manager
 
         engine = db_manager.get_engine()
-        async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
+        async_session_maker = build_session_maker(engine)
     return async_session_maker
+
+
+def build_session_maker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(engine, expire_on_commit=False, sync_session_class=session_class_for_settings())
 
 
 # Backwards-compatible alias for callers that imported the private symbol.

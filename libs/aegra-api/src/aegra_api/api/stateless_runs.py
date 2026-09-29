@@ -24,6 +24,7 @@ from aegra_api.api.runs import (
 from aegra_api.core.auth_deps import auth_dependency, get_current_user
 from aegra_api.core.orm import get_session
 from aegra_api.core.sse import make_sse_response
+from aegra_api.core.tenant import tenant_scope_dependency
 from aegra_api.models import Run, RunCreate, User
 from aegra_api.models.errors import CONFLICT, NOT_FOUND, SSE_RESPONSE
 from aegra_api.services.broker import broker_manager
@@ -34,7 +35,7 @@ from aegra_api.services.run_cleanup import (
     schedule_background_cleanup,
 )
 
-router = APIRouter(tags=["Stateless Runs"], dependencies=auth_dependency)
+router = APIRouter(tags=["Stateless Runs"], dependencies=[*auth_dependency, *tenant_scope_dependency])
 logger = structlog.getLogger(__name__)
 
 

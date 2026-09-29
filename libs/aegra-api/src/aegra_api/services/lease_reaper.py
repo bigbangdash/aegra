@@ -14,6 +14,7 @@ import structlog
 from redis import RedisError
 from sqlalchemy import select, update
 
+from aegra_api.core.db_scope import system_scope
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import _get_session_maker
 from aegra_api.core.redis_manager import redis_manager
@@ -33,7 +34,8 @@ class LeaseReaper:
 
     async def start(self) -> None:
         self._running = True
-        self._task = asyncio.create_task(self._loop())
+        with system_scope("lease reaper: cross-tenant crash recovery"):
+            self._task = asyncio.create_task(self._loop())
         logger.info(
             "Lease reaper started",
             interval_seconds=settings.worker.REAPER_INTERVAL_SECONDS,

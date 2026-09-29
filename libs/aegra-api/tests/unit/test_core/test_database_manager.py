@@ -5,6 +5,7 @@ import pytest
 
 # Adjust the import path to match your project structure
 from aegra_api.core.database import DatabaseManager
+from aegra_api.core.db_scope import current_db_scope
 from aegra_api.settings import settings
 
 
@@ -226,3 +227,45 @@ class TestDatabaseManager:
         # Store should be initialized with index=None
         mock_db_deps["store_cls"].assert_called_with(conn=mock_db_deps["pool_instance"], index=None)
         mock_db_deps["store_instance"].setup.assert_awaited_once()
+
+    async def test_initialize_uses_plain_pool_and_store_when_tenant_rls_disabled(
+        self, db_manager: DatabaseManager, mock_db_deps: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_RLS_ENABLED", False)
+
+        await db_manager.initialize()
+
+        mock_db_deps["pool_cls"].assert_called_once()
+        mock_db_deps["store_cls"].assert_called_once()
+
+    async def test_initialize_uses_tenant_scoped_pool_and_store_when_tenant_rls_enabled(
+        self, db_manager: DatabaseManager, mock_db_deps: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_RLS_ENABLED", True)
+        monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_DB_ROLE", "custom_tenant_role")
+        with (
+            patch("aegra_api.core.database.TenantScopedConnectionPool") as scoped_pool_cls,
+            patch("aegra_api.core.database.TenantScopedPostgresStore") as scoped_store_cls,
+        ):
+            scoped_pool_cls.return_value = AsyncMock()
+            scoped_store_cls.return_value = AsyncMock()
+
+            await db_manager.initialize()
+
+        mock_db_deps["pool_cls"].assert_not_called()
+        mock_db_deps["store_cls"].assert_not_called()
+        assert scoped_pool_cls.call_args.kwargs["tenant_role"] == "custom_tenant_role"
+        scoped_store_cls.return_value.setup.assert_awaited_once()
+
+    async def test_langgraph_setup_runs_in_system_scope(self, db_manager: DatabaseManager, mock_db_deps: dict) -> None:
+        seen: list[bool] = []
+
+        async def record_scope() -> None:
+            seen.append(current_db_scope().is_system)
+
+        mock_db_deps["saver_instance"].setup.side_effect = record_scope
+        mock_db_deps["store_instance"].setup.side_effect = record_scope
+
+        await db_manager.initialize()
+
+        assert seen == [True, True]

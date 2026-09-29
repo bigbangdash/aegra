@@ -3,7 +3,7 @@
 ``if_exists`` used to be implemented as a SELECT followed by an unconditional
 INSERT. Two requests that miss the SELECT both INSERT, and the loser's
 ``UniqueViolationError`` escapes as a 500 — on ``assistant_pkey``,
-``idx_assistant_user_assistant`` or ``idx_assistant_user_graph_config``. These
+``idx_assistant_user_assistant`` or ``idx_assistant_tenant_user_graph_config``. These
 tests drive the real server against a real database so the arbitration is
 exercised where it actually happens — in Postgres — rather than against a mock.
 """
@@ -110,7 +110,7 @@ async def test_concurrent_assistant_create_by_id_never_500s(warm_client: httpx.A
 async def test_concurrent_assistant_create_by_graph_and_config_never_500s(
     warm_client: httpx.AsyncClient,
 ) -> None:
-    """Server-generated IDs collide on idx_assistant_user_graph_config instead.
+    """Server-generated IDs collide on idx_assistant_tenant_user_graph_config instead.
 
     Nothing here shares an assistant_id, so this exercises the unique index the
     primary key cannot cover.
