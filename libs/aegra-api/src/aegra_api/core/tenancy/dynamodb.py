@@ -10,6 +10,7 @@ the default credentials are used and nothing expires.
 """
 
 import asyncio
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -100,7 +101,8 @@ class DynamoDBCheckpointerProvider:
         self._session_factory = session_factory
         self._clock = clock
         self._savers: dict[str, _TenantSaver] = {}
-        self._lock = asyncio.Lock()
+        # A thread lock: the sync path serves Pregel's sync methods from worker threads.
+        self._lock = threading.Lock()
         self._last_tenant_id: str | None = None
 
     def table_name(self, tenant_id: str) -> str:
@@ -111,17 +113,29 @@ class DynamoDBCheckpointerProvider:
         return frozenset(self._savers)
 
     async def for_tenant(self, tenant_id: str) -> BaseCheckpointSaver:
+        cached = self._cached(tenant_id)
+        if cached is not None:
+            return cached
+        return await asyncio.to_thread(self.for_tenant_sync, tenant_id)
+
+    def for_tenant_sync(self, tenant_id: str) -> BaseCheckpointSaver:
+        cached = self._cached(tenant_id)
+        if cached is not None:
+            return cached
+        with self._lock:
+            entry = self._savers.get(tenant_id)
+            if entry is None or self._needs_refresh(entry):
+                entry = self._build(tenant_id)
+                self._savers[tenant_id] = entry
+        self._last_tenant_id = tenant_id
+        return entry.saver
+
+    def _cached(self, tenant_id: str) -> BaseCheckpointSaver | None:
         if not is_valid_tenant_id(tenant_id):
             raise ValueError(f"tenant_id must match {TENANT_ID_PATTERN.pattern}: {tenant_id!r}")
         entry = self._savers.get(tenant_id)
-        if entry is not None and not self._needs_refresh(entry):
-            self._last_tenant_id = tenant_id
-            return entry.saver
-        async with self._lock:
-            entry = self._savers.get(tenant_id)
-            if entry is None or self._needs_refresh(entry):
-                entry = await asyncio.to_thread(self._build, tenant_id)
-                self._savers[tenant_id] = entry
+        if entry is None or self._needs_refresh(entry):
+            return None
         self._last_tenant_id = tenant_id
         return entry.saver
 
@@ -144,7 +158,7 @@ class DynamoDBCheckpointerProvider:
         return self._clock() >= entry.expires_at - CREDENTIAL_REFRESH_MARGIN
 
     def _build(self, tenant_id: str) -> _TenantSaver:
-        # Blocking boto3 calls (STS, DescribeTable); runs in a thread.
+        # Blocking boto3 calls (STS, DescribeTable); the async path runs it in a thread.
         session, expires_at = self._session_for(tenant_id)
         saver = PrunableDynamoDBSaver(
             table_name=self.table_name(tenant_id),

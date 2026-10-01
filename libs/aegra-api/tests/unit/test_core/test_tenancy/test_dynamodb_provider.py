@@ -424,3 +424,23 @@ class TestPrunableDynamoDBSaver:
             await saver.aprune(["thread-1"], strategy="purge")
 
         assert repo.calls == []
+
+
+def test_sync_lookup_builds_and_shares_the_cache_with_the_async_path(aws: FakeAws, clock: Clock) -> None:
+    provider = _provider(_aws_settings(), aws, clock)
+
+    saver = provider.for_tenant_sync("tenant-a")
+
+    assert saver.table_name == "aegra-ckpt-tenant-a"
+    assert provider.for_tenant_sync("tenant-a") is saver
+    assert asyncio.run(provider.for_tenant("tenant-a")) is saver
+    assert len(aws.assume_role_calls) == 1
+
+
+def test_sync_lookup_rejects_invalid_tenant_ids(aws: FakeAws, clock: Clock) -> None:
+    provider = _provider(_aws_settings(), aws, clock)
+
+    with pytest.raises(ValueError, match="tenant_id must match"):
+        provider.for_tenant_sync("bad id")
+
+    assert aws.sessions == []
