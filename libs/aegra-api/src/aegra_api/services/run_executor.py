@@ -13,9 +13,9 @@ import structlog
 
 from aegra_api.core.active_runs import active_run_tenants, active_runs
 from aegra_api.core.auth_ctx import with_auth_ctx
-from aegra_api.core.db_scope import tenant_scope
+from aegra_api.core.db_scope import system_scope, tenant_scope
 from aegra_api.core.redis_manager import redis_manager
-from aegra_api.core.tenant import tenant_id_for
+from aegra_api.core.tenant import TenantRejectedError, resolve_tenant_id
 from aegra_api.models.run_job import RunJob
 from aegra_api.services.broker import broker_manager
 from aegra_api.services.event_streaming.native_stream import stream_native_v3_events
@@ -45,11 +45,15 @@ async def execute_run(job: RunJob) -> None:
     Handles the full lifecycle: status transitions, event streaming,
     interrupt detection, cancellation, and error signaling.
     """
+    if not settings.tenant.AEGRA_TENANT_RLS_ENABLED:
+        await _execute_run(job)
+        return
     # The one place a run picks its tenant; every DB access below, including
     # tasks the graph spawns, inherits this scope.
-    tenant_id = tenant_id_for(job.user)
-    if tenant_id is None:
-        await _execute_run(job)
+    try:
+        tenant_id = await resolve_tenant_id(job.user)
+    except TenantRejectedError as e:
+        await _fail_rejected_run(job, str(e))
         return
     run_id = job.identity.run_id
     with tenant_scope(tenant_id):
@@ -58,6 +62,28 @@ async def execute_run(job: RunJob) -> None:
             await _execute_run(job)
         finally:
             active_run_tenants.pop(run_id, None)
+
+
+async def _fail_rejected_run(job: RunJob, reason: str) -> None:
+    # A queued run whose tenant was deactivated since. No tenant to act as, so the system closes it;
+    # stream signals are skipped because they need the tenant's key and its readers get 403 anyway.
+    run_id = job.identity.run_id
+    logger.warning("Run tenant rejected, failing the run", run_id=run_id, reason=reason)
+    try:
+        with system_scope("execute_run: fail a run whose tenant was rejected"):
+            await finalize_run(
+                run_id,
+                job.identity.thread_id,
+                user_id=job.user.identity,
+                status="error",
+                thread_status="error",
+                output={},
+                error=f"Tenant rejected: {reason}",
+            )
+    finally:
+        active_runs.pop(run_id, None)
+        await streaming_service.cleanup_run(run_id)
+        await _signal_run_done(run_id)
 
 
 async def _execute_run(job: RunJob) -> None:

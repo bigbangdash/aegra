@@ -11,8 +11,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi import HTTPException
 
-from aegra_api.core.db_scope import DbScope, DbScopeMissingError, current_db_scope, system_scope
+from aegra_api.core.db_scope import DbScope, DbScopeMissingError, current_db_scope, system_scope, tenant_scope
+from aegra_api.core.tenant import TenantRejectedError, TenantResolver, configure_tenant_resolver
+from aegra_api.models.auth import User
 from aegra_api.services.cron_scheduler import CronScheduler
+from aegra_api.settings import settings
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -695,6 +698,76 @@ class TestCronTenantScope:
         forged_user = mock_prepare.await_args.args[3]
         assert forged_user.identity == "test-user"
         assert forged_user.org_id == "tenant-a"
+
+    @staticmethod
+    async def _fire_with_resolver(
+        monkeypatch: pytest.MonkeyPatch, resolver: TenantResolver, cron: Any
+    ) -> tuple[AsyncMock, AsyncMock, AsyncMock]:
+        monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_RLS_ENABLED", True)
+        session = AsyncMock()
+        configure_tenant_resolver(resolver)
+        try:
+            with (
+                patch(
+                    "aegra_api.services.cron_scheduler._prepare_run",
+                    new_callable=AsyncMock,
+                    return_value=("run-1", Mock(), None),
+                ) as prepare,
+                patch(
+                    "aegra_api.services.cron_scheduler.CronService.advance_next_run", new_callable=AsyncMock
+                ) as advance,
+                tenant_scope(cron.tenant_id),
+            ):
+                await CronScheduler()._fire_cron(session, cron)
+        finally:
+            configure_tenant_resolver(None)
+        return prepare, advance, session
+
+    @pytest.mark.asyncio
+    async def test_cron_of_a_rejected_tenant_skips_this_fire_but_stays_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def registry(_user: User) -> str:
+            raise TenantRejectedError("tenant-a is inactive")
+
+        cron = _make_cron_orm(tenant_id="tenant-a", thread_id="t-1")
+        cron.end_time = None
+
+        prepare, advance, session = await self._fire_with_resolver(monkeypatch, registry, cron)
+
+        prepare.assert_not_awaited()
+        advance.assert_awaited_once_with(cron)
+        # No direct write: the disabling path (liveness failure) must not run.
+        session.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cron_is_skipped_when_the_resolver_now_maps_its_owner_elsewhere(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def remapped(_user: User) -> str:
+            return "tenant-b"
+
+        cron = _make_cron_orm(tenant_id="tenant-a", thread_id="t-1")
+        cron.end_time = None
+
+        prepare, advance, _ = await self._fire_with_resolver(monkeypatch, remapped, cron)
+
+        prepare.assert_not_awaited()
+        advance.assert_awaited_once_with(cron)
+
+    @pytest.mark.asyncio
+    async def test_cron_of_an_accepted_tenant_fires(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def registry(user: User) -> str:
+            assert user.org_id == "tenant-a"
+            return "tenant-a"
+
+        cron = _make_cron_orm(tenant_id="tenant-a", thread_id="t-1")
+        cron.end_time = None
+
+        prepare, advance, _ = await self._fire_with_resolver(monkeypatch, registry, cron)
+
+        prepare.assert_awaited_once()
+        advance.assert_awaited_once_with(cron)
 
     @pytest.mark.asyncio
     async def test_loop_task_starts_in_system_scope(self) -> None:

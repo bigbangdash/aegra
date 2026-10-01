@@ -22,7 +22,7 @@ from aegra_api.core.auth_handlers import build_auth_context, handle_event
 from aegra_api.core.orm import Cron as CronORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import get_session
-from aegra_api.core.tenant import tenant_id_for, tenant_scope_dependency
+from aegra_api.core.tenant import scoped_tenant_id, tenant_scope_dependency
 from aegra_api.models import Run, User
 from aegra_api.models.crons import (
     CronCountRequest,
@@ -237,7 +237,7 @@ async def _create_cron_atomic(
     When ``request.enabled`` is False the first run is suppressed entirely
     and the persisted ``Cron`` is returned instead of a ``Run``.
     """
-    cron = await service.create_cron(request, user.identity, thread_id=thread_id, tenant_id=tenant_id_for(user))
+    cron = await service.create_cron(request, user.identity, thread_id=thread_id, tenant_id=scoped_tenant_id())
 
     if request.enabled is False:
         return _cron_to_response(cron)

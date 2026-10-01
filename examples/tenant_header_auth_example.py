@@ -8,14 +8,31 @@ allow: derive org_id from a verified token instead.
 Headers:
   x-tenant-id  -> org_id   (default "e2e-tenant")
   x-user-id    -> identity (default "e2e-user")
+
+It also installs a stand-in tenant registry: the tenant "e2e-inactive" is
+rejected, to exercise configure_tenant_resolver end to end.
 """
 
 from langgraph_sdk import Auth
+
+from aegra_api.core.tenant import TenantRejectedError, configure_tenant_resolver, org_id_tenant_resolver
+from aegra_api.models.auth import User
 
 auth = Auth()
 
 DEFAULT_TENANT = "e2e-tenant"
 DEFAULT_USER = "e2e-user"
+INACTIVE_TENANT = "e2e-inactive"
+
+
+async def e2e_tenant_registry(user: User) -> str:
+    tenant_id = await org_id_tenant_resolver(user)
+    if tenant_id == INACTIVE_TENANT:
+        raise TenantRejectedError(f"tenant {tenant_id} is inactive")
+    return tenant_id
+
+
+configure_tenant_resolver(e2e_tenant_registry)
 
 
 @auth.authenticate

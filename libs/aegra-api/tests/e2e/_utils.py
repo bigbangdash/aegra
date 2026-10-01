@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from typing import Any
 
 import httpx
@@ -8,6 +9,20 @@ import pytest
 from aegra_api.settings import settings
 
 TERMINAL_RUN_STATES = ("success", "error", "interrupted", "timeout")
+
+
+def on_tenant_rls_stack() -> bool:
+    """True when the server runs docker-compose.tenant-rls.yml (header auth), flag on or off."""
+    return os.getenv("AEGRA_E2E_TENANT_RLS") == "1"
+
+
+def e2e_owner() -> tuple[str, str | None]:
+    """(user_id, tenant_id) the server assigns to header-less test calls, for rows seeded directly in the DB."""
+    if on_tenant_rls_stack():
+        # Defaults of examples/tenant_header_auth_example.py.
+        return "e2e-user", "e2e-tenant"
+    return "anonymous", None
+
 
 try:
     from langgraph_sdk import get_client

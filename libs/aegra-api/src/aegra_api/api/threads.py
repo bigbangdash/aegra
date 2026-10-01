@@ -23,7 +23,7 @@ from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import ThreadTTL as ThreadTTLORM
 from aegra_api.core.orm import get_session
-from aegra_api.core.tenant import tenant_id_for, tenant_scope_dependency
+from aegra_api.core.tenant import scoped_tenant_id, tenant_scope_dependency
 from aegra_api.models import (
     Thread,
     ThreadCheckpoint,
@@ -244,7 +244,7 @@ async def create_thread(
             status="idle",
             metadata_json=metadata,
             user_id=user.identity,
-            tenant_id=tenant_id_for(user),
+            tenant_id=scoped_tenant_id(),
         )
         .on_conflict_do_nothing(index_elements=["thread_id"])
         .returning(ThreadORM)

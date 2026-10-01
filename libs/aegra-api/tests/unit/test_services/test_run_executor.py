@@ -1,13 +1,14 @@
 """Unit tests for run_executor service."""
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 
-from aegra_api.core.active_runs import active_run_tenants
+from aegra_api.core.active_runs import active_run_tenants, active_runs
 from aegra_api.core.db_scope import DbScope, DbScopeMissingError, current_db_scope, system_scope
+from aegra_api.core.tenant import configure_tenant_resolver
 from aegra_api.models.auth import User
 from aegra_api.models.run_job import RunExecution, RunIdentity, RunJob
 from aegra_api.services import run_executor as run_executor_module
@@ -536,14 +537,54 @@ class TestExecuteRunTenantScope:
         assert job.identity.run_id not in active_run_tenants
 
     @pytest.mark.asyncio
-    async def test_job_without_org_is_refused_when_rls_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_job_whose_tenant_is_rejected_fails_the_run_without_executing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_RLS_ENABLED", True)
+        job = self._scoped_job(None)
+        active_runs[job.identity.run_id] = MagicMock()
         inner = AsyncMock()
+        finalize_scopes: list[DbScope | None] = []
 
-        with patch.object(run_executor_module, "_execute_run", inner), pytest.raises(HTTPException):
-            await execute_run(self._scoped_job(None))
+        async def record_finalize(*_args: Any, **kwargs: Any) -> bool:
+            finalize_scopes.append(self._scope_or_none())
+            assert kwargs["status"] == "error"
+            assert "Tenant rejected" in kwargs["error"]
+            return True
+
+        with (
+            patch.object(run_executor_module, "_execute_run", inner),
+            patch.object(run_executor_module, "finalize_run", side_effect=record_finalize) as finalize,
+            patch.object(run_executor_module, "_signal_run_done", AsyncMock()) as done,
+            patch.object(run_executor_module.streaming_service, "cleanup_run", AsyncMock()),
+        ):
+            await execute_run(job)
 
         inner.assert_not_awaited()
+        finalize.assert_awaited_once()
+        assert finalize_scopes[0] is not None and finalize_scopes[0].is_system
+        done.assert_awaited_once_with(job.identity.run_id)
+        assert job.identity.run_id not in active_runs
+
+    @pytest.mark.asyncio
+    async def test_configured_resolver_picks_the_run_tenant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_RLS_ENABLED", True)
+        seen: list[DbScope | None] = []
+
+        async def mapped(_user: User) -> str:
+            return "tenant-mapped"
+
+        async def record(_job: RunJob) -> None:
+            seen.append(self._scope_or_none())
+
+        configure_tenant_resolver(mapped)
+        try:
+            with patch.object(run_executor_module, "_execute_run", side_effect=record):
+                await execute_run(self._scoped_job("tenant-a"))
+        finally:
+            configure_tenant_resolver(None)
+
+        assert seen[0] is not None and seen[0].tenant_id == "tenant-mapped"
 
     @pytest.mark.asyncio
     async def test_no_scope_is_set_when_rls_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:

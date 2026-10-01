@@ -58,8 +58,11 @@ class RlsEnv:
     store: TenantScopedPostgresStore
 
 
-@pytest.fixture
-async def rls_env() -> AsyncIterator[RlsEnv]:
+# "aegra_custom" covers installs outside `public` (a search_path in the DSN, as #327 would set):
+# the tenant role then needs USAGE on the schema, which PUBLIC only has on `public` by default.
+@pytest.fixture(params=["public", "aegra_custom"])
+async def rls_env(request: pytest.FixtureRequest) -> AsyncIterator[RlsEnv]:
+    schema: str = request.param
     admin_dsn = settings.db.database_url_sync
     db_name = f"aegra_rls_{uuid.uuid4().hex[:12]}"
     try:
@@ -69,6 +72,10 @@ async def rls_env() -> AsyncIterator[RlsEnv]:
 
     await admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
     test_dsn = conninfo.make_conninfo(admin_dsn, dbname=db_name)
+    if schema != "public":
+        async with await psycopg.AsyncConnection.connect(test_dsn, autocommit=True) as schema_conn:
+            await schema_conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        test_dsn = conninfo.make_conninfo(test_dsn, options=f"-c search_path={schema}")
     # Store ops hold two checkouts at once (abatch + _cursor), so two is the floor.
     pool = TenantScopedConnectionPool(
         conninfo=test_dsn,
@@ -86,7 +93,7 @@ async def rls_env() -> AsyncIterator[RlsEnv]:
             await saver.setup()
             await store.setup()
         async with await psycopg.AsyncConnection.connect(test_dsn, autocommit=True) as ddl_conn:
-            await enable_tenant_rls(
+            covered = await enable_tenant_rls(
                 ddl_conn,
                 TENANT_ROLE,
                 tables=LANGGRAPH_TENANT_TABLES,
@@ -94,6 +101,11 @@ async def rls_env() -> AsyncIterator[RlsEnv]:
                 child_tables={},
                 grant_only_tables=(),
             )
+            assert covered == schema
+            cur = await ddl_conn.execute(
+                "SELECT count(*) FROM pg_tables WHERE schemaname = %s AND tablename = 'checkpoints'", (schema,)
+            )
+            assert (await cur.fetchone())[0] == 1, "LangGraph tables must live in the schema under test"
         yield RlsEnv(pool=pool, saver=saver, store=store)
     finally:
         await pool.close()

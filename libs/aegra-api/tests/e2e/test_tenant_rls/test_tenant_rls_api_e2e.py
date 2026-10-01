@@ -217,3 +217,15 @@ async def test_redis_event_buffer_holds_only_sealed_payloads() -> None:
     assert not any(marker in item for item in raw)
 
     assert await _status_of(intruder.runs.join(thread["thread_id"], run["run_id"])) == 404
+
+
+@pytest.mark.asyncio
+async def test_tenant_rejected_by_the_configured_resolver_gets_403() -> None:
+    # examples/tenant_header_auth_example.py installs a registry that rejects "e2e-inactive".
+    client = _client("e2e-inactive")
+
+    create_status = await _status_of(client.threads.create())
+    search_status = await _status_of(client.threads.search())
+
+    assert create_status == 403
+    assert search_status == 403

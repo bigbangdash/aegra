@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aegra_api.core.db_scope import is_valid_tenant_id, system_scope, tenant_scope
 from aegra_api.core.orm import Cron as CronORM
 from aegra_api.core.orm import _get_session_maker
+from aegra_api.core.tenant import TenantRejectedError, resolve_tenant_id
 from aegra_api.models import RunCreate, User
 from aegra_api.services.cron_service import (
     CronService,
@@ -203,6 +204,12 @@ class CronScheduler:
             is_authenticated=True,
             org_id=cron.tenant_id,
         )
+        rls_on = settings.tenant.AEGRA_TENANT_RLS_ENABLED
+        if rls_on and cron.tenant_id and (reason := await _tenant_rejection(user, cron.tenant_id)):
+            # Skip this occurrence but keep the cron enabled, so a reactivated tenant resumes.
+            logger.warning("Skipping cron fire: tenant rejected", cron_id=cron.cron_id, reason=reason)
+            await CronService(session).advance_next_run(cron)
+            return
 
         try:
             _run_id, _run, _job = await _prepare_run(
@@ -252,6 +259,17 @@ class CronScheduler:
                 thread_id=thread_id,
                 cron_id=cron.cron_id,
             )
+
+
+async def _tenant_rejection(user: User, stored_tenant_id: str) -> str | None:
+    # The stored tenant scopes the fire; the resolver only confirms it is still served, and as the same tenant.
+    try:
+        resolved = await resolve_tenant_id(user)
+    except TenantRejectedError as e:
+        return str(e)
+    if resolved != stored_tenant_id:
+        return f"resolver now maps this cron's owner to tenant {resolved!r}"
+    return None
 
 
 # Module-level singleton (matches executor / lease_reaper pattern)

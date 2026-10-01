@@ -19,7 +19,7 @@ from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.services.run_status import finalize_run
 from aegra_api.services.worker_executor import WorkerExecutor
 from aegra_api.settings import settings
-from tests.e2e._utils import elog
+from tests.e2e._utils import e2e_owner, elog
 
 InterruptionEndpoint = Literal["cancel", "patch"]
 
@@ -40,6 +40,7 @@ async def _seed_run(
     thread_id = str(uuid4())
     run_id = str(uuid4())
     now = datetime.now(UTC)
+    user_id, tenant_id = e2e_owner()
 
     async with maker() as session:
         session.add(
@@ -49,7 +50,8 @@ async def _seed_run(
                 graph_id="stress_test",
                 config={"test_id": assistant_id},
                 context={},
-                user_id="anonymous",
+                user_id=user_id,
+                tenant_id=tenant_id,
                 metadata_dict={},
                 version=1,
                 created_at=now,
@@ -60,7 +62,8 @@ async def _seed_run(
             ThreadORM(
                 thread_id=thread_id,
                 status=thread_status,
-                user_id="anonymous",
+                user_id=user_id,
+                tenant_id=tenant_id,
                 metadata_json={},
                 created_at=now,
                 updated_at=now,
@@ -74,7 +77,8 @@ async def _seed_run(
                 assistant_id=assistant_id,
                 status=run_status,
                 input={},
-                user_id="anonymous",
+                user_id=user_id,
+                tenant_id=tenant_id,
                 execution_params=execution_params,
                 claimed_by=claimed_by,
                 lease_expires_at=lease_expires_at,
@@ -90,7 +94,8 @@ async def _seed_run(
                     assistant_id=assistant_id,
                     status=additional_run_status,
                     input={},
-                    user_id="anonymous",
+                    user_id=user_id,
+                    tenant_id=tenant_id,
                     execution_params=None,
                     created_at=now,
                     updated_at=now,
@@ -228,7 +233,7 @@ async def test_stale_worker_cannot_overwrite_reconciled_interruption() -> None:
                 finalized = await finalize_run(
                     run_id,
                     thread_id,
-                    user_id="anonymous",
+                    user_id=e2e_owner()[0],
                     status="success",
                     thread_status="idle",
                     output={"late": True},

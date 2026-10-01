@@ -20,7 +20,7 @@ from aegra_api.core.orm import Assistant as AssistantORM
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import _get_session_maker
-from aegra_api.core.tenant import tenant_id_for
+from aegra_api.core.tenant import scoped_tenant_id
 from aegra_api.models import Run, RunCreate, User
 from aegra_api.models.run_job import RunBehavior, RunExecution, RunIdentity, RunJob
 from aegra_api.services.executor import executor
@@ -275,7 +275,7 @@ async def _prepare_run(
         raise HTTPException(404, f"Graph '{assistant.graph_id}' not found for assistant")
 
     # Mark thread as busy and update metadata
-    tenant_id = tenant_id_for(user)
+    tenant_id = scoped_tenant_id()
     await update_thread_metadata(
         session,
         thread_id,
