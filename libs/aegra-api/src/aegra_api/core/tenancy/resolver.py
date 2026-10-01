@@ -1,8 +1,8 @@
 """Resolve the authenticated user's tenant and scope requests to it.
 
 A tenant is resolved only at the three edges: the HTTP dependency, execute_run
-and each cron fire. Code below an edge reads it from the DB scope
-(scoped_tenant_id), so one request or run never resolves twice.
+and each cron fire. Code below an edge reads it from the DB scope (the ORM
+tenant_id default), so one request or run never resolves twice.
 """
 
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from fastapi import Depends, HTTPException
 
 from aegra_api.core.auth_deps import get_current_user
-from aegra_api.core.tenancy.scope import TENANT_ID_PATTERN, current_db_scope, is_valid_tenant_id, tenant_scope
+from aegra_api.core.tenancy.scope import TENANT_ID_PATTERN, is_valid_tenant_id, tenant_scope
 from aegra_api.models.auth import User
 from aegra_api.settings import settings
 
@@ -45,13 +45,6 @@ async def resolve_tenant_id(user: User) -> str:
     if not isinstance(tenant_id, str) or not is_valid_tenant_id(tenant_id):
         raise TenantRejectedError(f"tenant id must match {TENANT_ID_PATTERN.pattern}")
     return tenant_id
-
-
-def scoped_tenant_id() -> str | None:
-    """Tenant of the current DB scope for the tenant_id column; None with RLS off or in system scope."""
-    if not settings.tenant.AEGRA_TENANT_RLS_ENABLED:
-        return None
-    return current_db_scope().tenant_id
 
 
 async def tenant_db_scope(user: User = Depends(get_current_user)) -> AsyncIterator[None]:

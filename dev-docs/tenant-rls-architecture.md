@@ -65,9 +65,10 @@ Entry points (the ONLY places a tenant is chosen):
 | `services/run_executor.py::execute_run` | `resolve_tenant_id(job.user)`. Overrides the worker loop's system scope. Rejected → the run is finalized as `error` under system scope (no stream signals: they need the tenant key) |
 | `services/cron_scheduler.py::_tick` per cron | `cron.tenant_id` stored at create time; `_fire_cron` asks the resolver to confirm it (same tenant, still accepted). Rejected or remapped → this occurrence is skipped (next_run advances, cron stays enabled). Malformed legacy value → skipped and logged, batch continues |
 
-Below the edges, code that writes a `tenant_id` column reads `scoped_tenant_id()`
-(the current scope), never the user, so one request resolves once and a custom
-resolver cannot disagree with the column it scopes.
+Below the edges, nothing passes a tenant id around: every `tenant_id` column has
+`default=scoped_tenant_id` (`core/orm.py`), so the ORM fills it from the current
+scope on INSERT (NULL with RLS off or in system scope). One request resolves once
+and a custom resolver cannot disagree with the column it scopes.
 
 `configure_tenant_resolver(async fn)` is the registry hook, set at import time
 like `configure_key_provider()`. The resolver's result is validated centrally.

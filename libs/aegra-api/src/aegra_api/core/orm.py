@@ -21,7 +21,6 @@ import structlog
 from sqlalchemy import (
     TIMESTAMP,
     Boolean,
-    FetchedValue,
     Float,
     ForeignKey,
     Index,
@@ -35,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, declarative_base, mapped_column
 from sqlalchemy.types import TypeDecorator
 
+from aegra_api.core.tenancy.scope import scoped_tenant_id
 from aegra_api.core.tenancy.session import session_class_for_settings
 
 _logger = structlog.getLogger(__name__)
@@ -106,7 +106,7 @@ class Assistant(Base):
     context: Mapped[dict] = mapped_column(JsonbSafe, server_default=text("'{}'::jsonb"))
     user_id: Mapped[str] = mapped_column(Text, nullable=False)
     # NULL only for shared system assistants (enforced by the RLS enable step).
-    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=FetchedValue())
+    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, default=scoped_tenant_id)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     metadata_dict: Mapped[dict] = mapped_column(JsonbSafe, server_default=text("'{}'::jsonb"), name="metadata")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
@@ -153,9 +153,8 @@ class Thread(Base):
     # Database column is 'metadata_json' (per database.py). ORM attribute 'metadata_json' must map to that column.
     metadata_json: Mapped[dict] = mapped_column("metadata_json", JsonbSafe, server_default=text("'{}'::jsonb"))
     user_id: Mapped[str] = mapped_column(Text, nullable=False)
-    # Set only when AEGRA_TENANT_RLS_ENABLED; NOT NULL and the scope default come from the
-    # RLS enable step. FetchedValue keeps an unset attribute out of INSERT so that default applies.
-    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=FetchedValue())
+    # Filled from the current DB scope on INSERT (NULL with RLS off); NOT NULL comes from the RLS enable step.
+    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, default=scoped_tenant_id)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
 
@@ -182,7 +181,7 @@ class Run(Base):
     output: Mapped[dict | None] = mapped_column(JsonbSafe)
     error_message: Mapped[str | None] = mapped_column(Text)
     user_id: Mapped[str] = mapped_column(Text, nullable=False)
-    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=FetchedValue())
+    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, default=scoped_tenant_id)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
 
@@ -220,7 +219,7 @@ class Cron(Base):
         Text, ForeignKey("thread.thread_id", ondelete="CASCADE"), nullable=True
     )
     user_id: Mapped[str] = mapped_column(Text, nullable=False)
-    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=FetchedValue())
+    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True, default=scoped_tenant_id)
     schedule: Mapped[str] = mapped_column(Text, nullable=False)
     # JsonbSafe strips NULL bytes from user payloads — same protection as runs.input.
     payload: Mapped[dict] = mapped_column(JsonbSafe, server_default=text("'{}'::jsonb"))

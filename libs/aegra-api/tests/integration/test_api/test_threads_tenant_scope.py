@@ -16,6 +16,15 @@ from tests.fixtures.database import DummyScalarResult, DummySessionBase
 from tests.fixtures.session_fixtures import override_session_dependency
 
 
+def _insert_params(stmt: Insert) -> dict[str, Any]:
+    compiled = stmt.compile(dialect=postgresql.dialect())
+    params: dict[str, Any] = dict(compiled.params)
+    # Python-side column defaults (tenant_id) are resolved at execution time, not compile time.
+    for column in compiled.prefetch:
+        params[column.key] = column.default.arg(None)
+    return params
+
+
 def _scope_or_none() -> DbScope | None:
     try:
         return current_db_scope()
@@ -36,7 +45,7 @@ class RecordingSession(DummySessionBase):
     async def scalars(self, stmt: Any = None) -> DummyScalarResult:
         RecordingSession.scopes.append(_scope_or_none())
         if isinstance(stmt, Insert):
-            RecordingSession.inserts.append(stmt.compile(dialect=postgresql.dialect()).params)
+            RecordingSession.inserts.append(_insert_params(stmt))
         return await super().scalars(stmt)
 
 

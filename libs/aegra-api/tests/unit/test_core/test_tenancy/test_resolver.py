@@ -7,10 +7,15 @@ from aegra_api.core.tenancy.resolver import (
     TenantRejectedError,
     configure_tenant_resolver,
     resolve_tenant_id,
-    scoped_tenant_id,
     tenant_db_scope,
 )
-from aegra_api.core.tenancy.scope import DbScopeMissingError, current_db_scope, system_scope, tenant_scope
+from aegra_api.core.tenancy.scope import (
+    DbScopeMissingError,
+    current_db_scope,
+    scoped_tenant_id,
+    system_scope,
+    tenant_scope,
+)
 from aegra_api.models.auth import User
 from aegra_api.settings import settings
 

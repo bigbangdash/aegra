@@ -11,6 +11,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+from aegra_api.settings import settings
+
 # Tenant ids end up in store namespaces (dot-joined), AES-GCM associated data and
 # log lines, so only a plain token is accepted. Tighten once the IdP's format is known.
 TENANT_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -44,6 +46,13 @@ def current_db_scope() -> DbScope:
             "No DB scope declared for this operation; wrap it in tenant_scope() or system_scope()"
         )
     return scope
+
+
+def scoped_tenant_id() -> str | None:
+    """Tenant of the current DB scope for the tenant_id column; None with RLS off or in system scope."""
+    if not settings.tenant.AEGRA_TENANT_RLS_ENABLED:
+        return None
+    return current_db_scope().tenant_id
 
 
 @contextmanager
