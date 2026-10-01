@@ -342,10 +342,25 @@ async def test_health_without_tenants_lists_tables_on_a_local_endpoint(aws: Fake
 async def test_health_propagates_backend_errors(aws: FakeAws, clock: Clock) -> None:
     provider = _provider(_aws_settings(), aws, clock)
     await provider.for_tenant("tenant-a")
-    aws.missing_tables.add("aegra-ckpt-tenant-a")
+    aws.denied_tables.add("aegra-ckpt-tenant-a")
 
     with pytest.raises(ClientError):
         await provider.health()
+
+
+async def test_health_stays_green_when_the_last_tenant_was_decommissioned(aws: FakeAws, clock: Clock) -> None:
+    provider = _provider(_aws_settings(), aws, clock)
+    await provider.for_tenant("tenant-a")
+    aws.missing_tables.add("aegra-ckpt-tenant-a")
+
+    await provider.health()
+
+    # The backend answered, so the service is healthy; the stale saver is dropped and re-checked next time.
+    assert provider.cached_tenants == frozenset()
+    with pytest.raises(TenantCheckpointTableMissingError):
+        await provider.for_tenant("tenant-a")
+    await provider.health()  # falls back to the backend probe
+    assert aws.clients_for("sts")[-1].calls[-1][0] == "get_caller_identity"
 
 
 class RecordingRepo:
