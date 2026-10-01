@@ -1,4 +1,6 @@
 import os
+from contextlib import ExitStack
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -269,3 +271,54 @@ class TestDatabaseManager:
         await db_manager.initialize()
 
         assert seen == [True, True]
+
+
+class TestDatabaseManagerDynamoDBBackend:
+    """AEGRA_CHECKPOINT_BACKEND=dynamodb swaps the saver for the tenant router; Postgres keeps the store."""
+
+    @pytest.fixture
+    def dynamodb_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings.checkpoint, "AEGRA_CHECKPOINT_BACKEND", "dynamodb")
+        monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_RLS_ENABLED", True)
+
+    @staticmethod
+    def _patched_backends(router: AsyncMock) -> tuple[Any, ...]:
+        return (
+            patch("aegra_api.core.database.create_async_engine", return_value=AsyncMock()),
+            patch("aegra_api.core.database.AsyncConnectionPool", return_value=AsyncMock()),
+            patch("aegra_api.core.database.TenantScopedConnectionPool", return_value=AsyncMock()),
+            patch("aegra_api.core.database.AsyncPostgresSaver", return_value=AsyncMock()),
+            patch("aegra_api.core.database.AsyncPostgresStore", return_value=AsyncMock()),
+            patch("aegra_api.core.database.TenantScopedPostgresStore", return_value=AsyncMock()),
+            patch("aegra_api.core.database.load_store_config", return_value=None),
+            patch("aegra_api.core.database.build_tenant_checkpointer", return_value=router),
+        )
+
+    async def test_initialize_builds_the_router_and_sets_up_only_the_store(self, dynamodb_backend: None) -> None:
+        router = AsyncMock()
+        with ExitStack() as stack:
+            mocks = [stack.enter_context(p) for p in self._patched_backends(router)]
+            manager = DatabaseManager()
+
+            await manager.initialize()
+
+        _engine, _pool, _scoped_pool, saver_cls, _store_cls, scoped_store_cls, _config, build = mocks
+        build.assert_called_once_with(settings.checkpoint)
+        saver_cls.assert_not_called()
+        router.setup.assert_not_awaited()
+        scoped_store_cls.return_value.setup.assert_awaited_once()
+        assert manager.get_checkpointer() is router
+
+    async def test_postgres_backend_still_sets_up_the_saver(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings.checkpoint, "AEGRA_CHECKPOINT_BACKEND", "postgres")
+        monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_RLS_ENABLED", False)
+        with ExitStack() as stack:
+            mocks = [stack.enter_context(p) for p in self._patched_backends(AsyncMock())]
+            manager = DatabaseManager()
+
+            await manager.initialize()
+
+        saver_cls, build = mocks[3], mocks[7]
+        build.assert_not_called()
+        saver_cls.return_value.setup.assert_awaited_once()
+        assert manager.get_checkpointer() is saver_cls.return_value

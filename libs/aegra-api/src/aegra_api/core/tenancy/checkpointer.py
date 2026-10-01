@@ -22,7 +22,7 @@ from langgraph.checkpoint.base import (
 )
 
 from aegra_api.core.tenancy.scope import current_db_scope
-from aegra_api.settings import settings
+from aegra_api.settings import CheckpointSettings, settings
 
 logger = structlog.get_logger(__name__)
 
@@ -56,6 +56,15 @@ class TenantCheckpointCredentialsError(TenantCheckpointerError):
 
 class SystemScopeCheckpointerError(RuntimeError):
     """Checkpoints have no cross-tenant view: system-scoped code must enter tenant_scope() first."""
+
+
+try:
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    # Transient backend failures a sweep tolerates per item, like psycopg errors on Postgres.
+    CHECKPOINT_BACKEND_ERRORS: tuple[type[Exception], ...] = (TenantCheckpointerError, BotoCoreError, ClientError)
+except ImportError:
+    CHECKPOINT_BACKEND_ERRORS = (TenantCheckpointerError,)
 
 
 class TenantCheckpointerProvider(Protocol):
@@ -236,3 +245,14 @@ def ensure_checkpoint_backend_available() -> None:
         region=settings.checkpoint.AEGRA_DYNAMODB_REGION,
         endpoint_url=settings.checkpoint.AEGRA_DYNAMODB_ENDPOINT_URL,
     )
+
+
+def build_tenant_checkpointer(config: CheckpointSettings) -> TenantRoutingCheckpointer:
+    """The checkpointer for AEGRA_CHECKPOINT_BACKEND=dynamodb; the extra is imported only here."""
+    try:
+        from aegra_api.core.tenancy.dynamodb import DynamoDBCheckpointerProvider
+    except ImportError as e:
+        raise CheckpointBackendError(
+            "AEGRA_CHECKPOINT_BACKEND=dynamodb needs the optional dependency: pip install 'aegra-api[dynamodb]'"
+        ) from e
+    return TenantRoutingCheckpointer(DynamoDBCheckpointerProvider(config))

@@ -5,11 +5,13 @@ from collections.abc import AsyncIterator
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from aegra_api import __version__
 from aegra_api.core.database import db_manager
+from aegra_api.core.tenancy.checkpointer import TenantRoutingCheckpointer
 from aegra_api.core.tenancy.scope import system_scope
 from aegra_api.models.errors import UNAVAILABLE
 from aegra_api.settings import settings
@@ -25,6 +27,16 @@ async def _probe_db_scope() -> AsyncIterator[None]:
 
 
 router = APIRouter(tags=["Health"], dependencies=[Depends(_probe_db_scope)])
+
+
+async def _probe_checkpointer(checkpointer: BaseCheckpointSaver, thread_id: str) -> None:
+    # The router has no system-wide table to read; its provider knows how to probe the backend.
+    if isinstance(checkpointer, TenantRoutingCheckpointer):
+        await checkpointer.provider.health()
+        return
+    # Will raise if the connection is bad; a missing tuple is fine.
+    with contextlib.suppress(Exception):
+        await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
 
 
 class HealthResponse(BaseModel):
@@ -91,10 +103,7 @@ async def health_check(_request: Request) -> HealthResponse:
 
     # LangGraph checkpointer (lazy-init)
     try:
-        checkpointer = db_manager.get_checkpointer()
-        # probe - will raise if connection is bad; tuple may not exist which is fine
-        with contextlib.suppress(Exception):
-            await checkpointer.aget_tuple({"configurable": {"thread_id": "health-check"}})
+        await _probe_checkpointer(db_manager.get_checkpointer(), "health-check")
         health_status["langgraph_checkpointer"] = "connected"
     except Exception as e:
         health_status["langgraph_checkpointer"] = f"error: {str(e)}"
@@ -141,8 +150,7 @@ async def readiness_check(_request: Request) -> dict[str, str]:
         checkpointer = db_manager.get_checkpointer()
         store = db_manager.get_store()
         # lightweight probes
-        with contextlib.suppress(Exception):
-            await checkpointer.aget_tuple({"configurable": {"thread_id": "ready-check"}})
+        await _probe_checkpointer(checkpointer, "ready-check")
         with contextlib.suppress(Exception):
             await store.aget(("ready",), "check")
     except Exception as e:
