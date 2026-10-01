@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from aegra_api.core import tenant_crypto
-from aegra_api.core.db_scope import DbScopeMissingError, system_scope, tenant_scope
-from aegra_api.core.tenant_crypto import StaticKeyProvider, TenantPayloadError
+from aegra_api.core.tenancy import crypto
+from aegra_api.core.tenancy.crypto import StaticKeyProvider, TenantPayloadError
+from aegra_api.core.tenancy.scope import DbScopeMissingError, system_scope, tenant_scope
 from aegra_api.services.redis_broker import RedisBrokerManager, RedisRunBroker
 from aegra_api.settings import settings
 
@@ -59,9 +59,9 @@ class FakeRedis:
 @pytest.fixture(autouse=True)
 def rls_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_RLS_ENABLED", True)
-    tenant_crypto.configure_key_provider(StaticKeyProvider(bytes(range(32))))
+    crypto.configure_key_provider(StaticKeyProvider(bytes(range(32))))
     yield
-    tenant_crypto.configure_key_provider(None)
+    crypto.configure_key_provider(None)
 
 
 @pytest.fixture
@@ -147,7 +147,7 @@ async def test_unsealed_message_is_refused_while_rls_is_on(redis: FakeRedis) -> 
 async def test_end_in_buffer_is_detected_without_a_key(redis: FakeRedis) -> None:
     with tenant_scope("tenant-a"):
         await _broker().put("evt-1", ("end", {"status": "success"}))
-    tenant_crypto.configure_key_provider(MagicMock(get_key=AsyncMock(side_effect=AssertionError("no key needed"))))
+    crypto.configure_key_provider(MagicMock(get_key=AsyncMock(side_effect=AssertionError("no key needed"))))
 
     reader = _broker()
     assert await reader._check_end_in_buffer() is True

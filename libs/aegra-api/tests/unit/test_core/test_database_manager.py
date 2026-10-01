@@ -5,7 +5,7 @@ import pytest
 
 # Adjust the import path to match your project structure
 from aegra_api.core.database import DatabaseManager
-from aegra_api.core.db_scope import current_db_scope
+from aegra_api.core.tenancy.scope import current_db_scope
 from aegra_api.settings import settings
 
 

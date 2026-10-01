@@ -5,18 +5,18 @@ transaction after every commit, so the scope is re-applied on each
 after_begin rather than once per request.
 
 System transactions raise SYSTEM_SETTING, the only way the login role sees rows
-once the tables use FORCE ROW LEVEL SECURITY (see core.tenant_pool).
+once the tables use FORCE ROW LEVEL SECURITY (see core.tenancy.pool).
 """
 
 from sqlalchemy import event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, SessionTransaction
 
-from aegra_api.core.db_scope import current_db_scope
-from aegra_api.core.tenant_pool import SYSTEM_SETTING, TENANT_SETTING
+from aegra_api.core.tenancy.pool import SYSTEM_SETTING, TENANT_SETTING
+from aegra_api.core.tenancy.scope import current_db_scope
 from aegra_api.settings import settings
 
-# One round trip, as in core.tenant_pool: set_config('role', ...) is SET LOCAL ROLE.
+# One round trip, as in core.tenancy.pool: set_config('role', ...) is SET LOCAL ROLE.
 _APPLY_TENANT = text(
     "SELECT set_config('role', :role, true), set_config(:tenant_name, :tenant, true), "
     "set_config(:system_name, '', true)"

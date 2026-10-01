@@ -20,10 +20,10 @@ import structlog
 from redis import RedisError
 
 from aegra_api.core.active_runs import active_run_tenants, active_runs, explicit_run_cancellations
-from aegra_api.core.db_scope import DbScopeMissingError, tenant_scope
 from aegra_api.core.redis_manager import redis_manager
 from aegra_api.core.serializers import GeneralSerializer
-from aegra_api.core.tenant_crypto import TenantPayloadError, encryption_tenant, get_key_provider, open_sealed, seal
+from aegra_api.core.tenancy.crypto import TenantPayloadError, encryption_tenant, get_key_provider, open_sealed, seal
+from aegra_api.core.tenancy.scope import DbScopeMissingError, tenant_scope
 from aegra_api.models.enums import RunCancellationAction
 from aegra_api.services.base_broker import REPLAY_RETENTION_SECONDS, BaseBrokerManager, BaseRunBroker
 from aegra_api.settings import settings

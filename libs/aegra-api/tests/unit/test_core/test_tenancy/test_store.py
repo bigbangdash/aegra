@@ -7,8 +7,8 @@ import pytest
 from langgraph.store.base import GetOp, Item, ListNamespacesOp, MatchCondition, Op, PutOp, Result, SearchOp
 from langgraph.store.postgres.aio import AsyncPostgresStore
 
-from aegra_api.core.db_scope import DbScopeMissingError, system_scope, tenant_scope
-from aegra_api.core.tenant_store import TENANT_NAMESPACE_ROOT, TenantScopedPostgresStore, tenant_namespace_prefix
+from aegra_api.core.tenancy.scope import DbScopeMissingError, system_scope, tenant_scope
+from aegra_api.core.tenancy.store import TENANT_NAMESPACE_ROOT, TenantScopedPostgresStore, tenant_namespace_prefix
 
 HEAD = (TENANT_NAMESPACE_ROOT, "tenant-a")
 

@@ -15,7 +15,7 @@ from fastapi import APIRouter, Body, Depends, Query
 
 from aegra_api.core.auth_deps import auth_dependency
 from aegra_api.core.orm import Assistant as AssistantORM
-from aegra_api.core.tenant import tenant_scope_dependency
+from aegra_api.core.tenancy.resolver import tenant_scope_dependency
 from aegra_api.models import (
     AgentSchemas,
     Assistant,

@@ -22,7 +22,7 @@ from aegra_api.core.auth_handlers import build_auth_context, handle_event
 from aegra_api.core.orm import Cron as CronORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import get_session
-from aegra_api.core.tenant import scoped_tenant_id, tenant_scope_dependency
+from aegra_api.core.tenancy.resolver import scoped_tenant_id, tenant_scope_dependency
 from aegra_api.models import Run, User
 from aegra_api.models.crons import (
     CronCountRequest,

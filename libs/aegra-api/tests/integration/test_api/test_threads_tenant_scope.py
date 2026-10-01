@@ -8,7 +8,7 @@ from sqlalchemy import Insert
 from sqlalchemy.dialects import postgresql
 
 from aegra_api.core.auth_deps import get_current_user, require_auth
-from aegra_api.core.db_scope import DbScope, DbScopeMissingError, current_db_scope
+from aegra_api.core.tenancy.scope import DbScope, DbScopeMissingError, current_db_scope
 from aegra_api.models.auth import User
 from aegra_api.settings import settings
 from tests.fixtures.clients import create_test_app, make_client

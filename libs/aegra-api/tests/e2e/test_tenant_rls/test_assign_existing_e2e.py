@@ -22,14 +22,14 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from aegra_api.core.db_scope import system_scope, tenant_scope
 from aegra_api.core.orm import Assistant as AssistantORM
 from aegra_api.core.orm import Base, build_session_maker
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
-from aegra_api.core.tenant_pool import TenantScopedConnectionPool
-from aegra_api.core.tenant_rls import UntaggedRowsError, enable_tenant_rls
-from aegra_api.core.tenant_store import TenantScopedPostgresStore
+from aegra_api.core.tenancy.pool import TenantScopedConnectionPool
+from aegra_api.core.tenancy.rls import UntaggedRowsError, enable_tenant_rls
+from aegra_api.core.tenancy.scope import system_scope, tenant_scope
+from aegra_api.core.tenancy.store import TenantScopedPostgresStore
 from aegra_api.settings import settings
 
 pytestmark = pytest.mark.e2e

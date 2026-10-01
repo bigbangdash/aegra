@@ -27,11 +27,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegra_api.config import load_checkpointer_config
 from aegra_api.core.database import db_manager
-from aegra_api.core.db_scope import system_scope
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import ThreadTTL as ThreadTTLORM
 from aegra_api.core.orm import _get_session_maker
+from aegra_api.core.tenancy.scope import system_scope
 from aegra_api.models.threads import MAX_TTL_MINUTES
 from aegra_api.observability.metrics import THREAD_TTL_SWEPT
 from aegra_api.settings import settings

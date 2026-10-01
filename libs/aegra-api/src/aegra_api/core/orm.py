@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, declarative_base, mapped_column
 from sqlalchemy.types import TypeDecorator
 
-from aegra_api.core.tenant_session import session_class_for_settings
+from aegra_api.core.tenancy.session import session_class_for_settings
 
 _logger = structlog.getLogger(__name__)
 

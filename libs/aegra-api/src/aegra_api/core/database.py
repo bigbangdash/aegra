@@ -10,9 +10,9 @@ from psycopg_pool import AsyncConnectionPool
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from aegra_api.config import load_store_config
-from aegra_api.core.db_scope import system_scope
-from aegra_api.core.tenant_pool import TenantScopedConnectionPool
-from aegra_api.core.tenant_store import TenantScopedPostgresStore
+from aegra_api.core.tenancy.pool import TenantScopedConnectionPool
+from aegra_api.core.tenancy.scope import system_scope
+from aegra_api.core.tenancy.store import TenantScopedPostgresStore
 from aegra_api.settings import settings
 
 logger = structlog.get_logger(__name__)

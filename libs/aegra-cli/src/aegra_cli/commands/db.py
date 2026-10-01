@@ -309,8 +309,8 @@ def enable_tenant_rls(
     )
 
     # Imported here so settings read the .env loaded by the db group — see module docstring.
-    from aegra_api.core.tenant_rls import UntaggedRowsError
-    from aegra_api.core.tenant_rls import enable_tenant_rls as apply_tenant_rls
+    from aegra_api.core.tenancy.rls import UntaggedRowsError
+    from aegra_api.core.tenancy.rls import enable_tenant_rls as apply_tenant_rls
     from aegra_api.settings import settings
 
     # The policies make tenant_id NOT NULL; a server with the flag off cannot fill it.
