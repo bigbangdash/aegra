@@ -20,7 +20,6 @@ from aegra_api.core.orm import Assistant as AssistantORM
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import _get_session_maker
-from aegra_api.core.tenancy.resolver import scoped_tenant_id
 from aegra_api.models import Run, RunCreate, User
 from aegra_api.models.run_job import RunBehavior, RunExecution, RunIdentity, RunJob
 from aegra_api.services.executor import executor
@@ -139,7 +138,6 @@ async def update_thread_metadata(
     graph_id: str,
     *,
     user_id: str | None = None,
-    tenant_id: str | None = None,
     input_data: dict[str, Any] | None = None,
 ) -> None:
     """Update thread metadata with assistant and graph information.
@@ -172,7 +170,7 @@ async def update_thread_metadata(
         # by another tenant looks absent; let the key arbitrate instead of 500ing.
         created = await session.scalar(
             pg_insert(ThreadORM)
-            .values(thread_id=thread_id, status="idle", metadata_json=metadata, user_id=user_id, tenant_id=tenant_id)
+            .values(thread_id=thread_id, status="idle", metadata_json=metadata, user_id=user_id)
             .on_conflict_do_nothing(index_elements=["thread_id"])
             .returning(ThreadORM.thread_id)
         )
@@ -275,15 +273,8 @@ async def _prepare_run(
         raise HTTPException(404, f"Graph '{assistant.graph_id}' not found for assistant")
 
     # Mark thread as busy and update metadata
-    tenant_id = scoped_tenant_id()
     await update_thread_metadata(
-        session,
-        thread_id,
-        assistant.assistant_id,
-        assistant.graph_id,
-        user_id=user.identity,
-        tenant_id=tenant_id,
-        input_data=request.input,
+        session, thread_id, assistant.assistant_id, assistant.graph_id, user_id=user.identity, input_data=request.input
     )
     await set_thread_status(session, thread_id, "busy")
 
@@ -330,7 +321,6 @@ async def _prepare_run(
         config=config,
         context=context,
         user_id=user.identity,
-        tenant_id=tenant_id,
         created_at=now,
         updated_at=now,
         output=None,

@@ -206,7 +206,6 @@ class CronService:
         user_identity: str,
         *,
         thread_id: str | None = None,
-        tenant_id: str | None = None,
     ) -> CronORM:
         """Create a new cron job record.
 
@@ -281,7 +280,6 @@ class CronService:
             assistant_id=resolved_assistant_id,
             thread_id=thread_id,
             user_id=user_identity,
-            tenant_id=tenant_id,
             schedule=request.schedule,
             payload=payload,
             metadata_dict=request.metadata or {},

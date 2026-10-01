@@ -31,7 +31,6 @@ from aegra_api.core.auth_filters import build_metadata_filter
 from aegra_api.core.orm import Assistant as AssistantORM
 from aegra_api.core.orm import AssistantVersion as AssistantVersionORM
 from aegra_api.core.orm import get_session
-from aegra_api.core.tenancy.resolver import scoped_tenant_id
 from aegra_api.models import Assistant, AssistantCreate, AssistantUpdate
 from aegra_api.models.auth import User
 from aegra_api.services.authenticated import Authenticated
@@ -216,7 +215,6 @@ class AssistantService(Authenticated):
                 context=context,
                 graph_id=graph_id,
                 user_id=self.user.identity,
-                tenant_id=scoped_tenant_id(),
                 metadata_dict=metadata,
                 version=1,
             )
