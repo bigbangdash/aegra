@@ -141,9 +141,10 @@ class DynamoDBCheckpointerProvider:
 
     async def health(self) -> None:
         """One call with real credentials; never walks every tenant's table (proposal §6.1)."""
-        entry = self._savers.get(self._last_tenant_id) if self._last_tenant_id else None
-        if entry is not None:
-            await asyncio.to_thread(entry.saver.client.describe_table, TableName=entry.saver.table_name)
+        tenant_id = self._last_tenant_id
+        entry = self._savers.get(tenant_id) if tenant_id else None
+        if tenant_id is not None and entry is not None:
+            await asyncio.to_thread(self._probe_tenant_table, tenant_id, entry.saver)
             return
         session = self._session_factory(region_name=self._config.AEGRA_DYNAMODB_REGION)
         endpoint_url = self._config.AEGRA_DYNAMODB_ENDPOINT_URL
@@ -151,6 +152,16 @@ class DynamoDBCheckpointerProvider:
             await asyncio.to_thread(session.client("dynamodb", endpoint_url=endpoint_url).list_tables, Limit=1)
             return
         await asyncio.to_thread(session.client("sts").get_caller_identity)
+
+    def _probe_tenant_table(self, tenant_id: str, saver: PrunableDynamoDBSaver) -> None:
+        try:
+            saver.client.describe_table(TableName=saver.table_name)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "ResourceNotFoundException":
+                raise
+            # The backend answered; the tenant was decommissioned. Forget it so the next call re-checks.
+            self._savers.pop(tenant_id, None)
+            logger.warning("Tenant checkpoint table is gone", tenant_id=tenant_id, table=saver.table_name)
 
     def _needs_refresh(self, entry: _TenantSaver) -> bool:
         if entry.expires_at is None:

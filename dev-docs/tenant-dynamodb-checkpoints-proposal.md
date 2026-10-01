@@ -213,7 +213,9 @@ Aegra に入るのは §4.1 の `DynamoDBCheckpointerProvider` まで。テー�
   `AEGRA_DYNAMODB_TTL_SECONDS` を設定すると `DynamoDBSaver` が S3 バケットのライフサイクル設定を読み書きしようとする
   （`s3:GetLifecycleConfiguration` / `PutLifecycleConfiguration`。無くても警告ログだけで動く）
 - `health()` は、直近に使ったテナントの saver で `DescribeTable` を1回。まだどのテナントも使っていなければ
-  実 AWS では `sts:GetCallerIdentity`、Local では `ListTables(Limit=1)`。全テナントのテーブルは見ない
+  実 AWS では `sts:GetCallerIdentity`、Local では `ListTables(Limit=1)`。全テナントのテーブルは見ない。
+  直近のテナントのテーブルが消えていても（解約、§6.2）バックエンドは応答しているので健康とみなし、
+  その saver をキャッシュから外す（次の要求は作り直し → `TenantCheckpointTableMissingError`）
 
 ### 6.2 テナントのライフサイクル
 
@@ -277,6 +279,8 @@ Aegra に入るのは §4.1 の `DynamoDBCheckpointerProvider` まで。テー�
   性能（同期 boto3 のスレッドプール、`alist(filter=)` の全件読み）も未計測
 - `keep_latest` の prune は `DeltaChannel` を使うグラフでは履歴の鎖を切る（langgraph-checkpoint の `prune` の注意書き）。
   今の Postgres の生 SQL も同じ性質なので据え置き。`DeltaChannel` を使い始めるときに見直す
+- キャッシュ済みの saver があるテナントのテーブルを消すと、`health()` が気づくまでは読み書きが boto3 の
+  `ResourceNotFoundException` のまま上がる（403 にならない）。解約したテナントはレジストリ（resolver）で先に止める前提
 - Docker イメージ（`deployments/docker/Dockerfile`）は `uv export --no-emit-project` で extra を入れないので、
   `dynamodb` で動かすイメージには extra の追加が要る（今回は host で起動して E2E）
 - 孤児の突き合わせジョブで、見つけたものを自動で消すか、報告だけにするか
