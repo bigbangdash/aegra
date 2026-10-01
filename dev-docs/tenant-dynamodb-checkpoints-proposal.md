@@ -1,7 +1,9 @@
 # テナント別 DynamoDB チェックポイント — 仕様案（B 案）
 
-状態: **提案・未実装**（2026-10-01）。前提は `tenant-rls-architecture.md`（以下「RLS 設計書」）。
-ユーザー向けではない。採否が決まるまで `docs/` には何も書かない。
+状態: **実装済み（Draft PR、ブランチ `feat/tenant-dynamodb-checkpoints`、2026-10-02）**。採否は未決。
+前提は `tenant-rls-architecture.md`（以下「RLS 設計書」）。
+ユーザー向けではない。採否が決まるまで `docs/` には環境変数の参照（`docs/reference/environment-variables.mdx`）以外書かない。
+実 AWS（STS・IAM）では未確認。DynamoDB Local での E2E まで（§7）。
 
 ---
 
@@ -87,12 +89,16 @@ TenantRoutingCheckpointer ──for_tenant(t)──▶ DynamoDBSaver(table = {PR
 ### 4.1 テナントごとの saver を作る部分
 
 ```python
-# core/tenant_checkpointer.py（新規）
+# core/tenancy/checkpointer.py（Protocol・振り分け・起動時の確認。extra を import しない）
 class TenantCheckpointerProvider(Protocol):
     async def for_tenant(self, tenant_id: str) -> BaseCheckpointSaver: ...
+    def for_tenant_sync(self, tenant_id: str) -> BaseCheckpointSaver: ...   # Pregel の同期経路用
     async def health(self) -> None: ...          # 例外 = 不健康
 
+# core/tenancy/dynamodb.py（extra を先頭で import する。build_tenant_checkpointer() からだけ読み込む）
 class DynamoDBCheckpointerProvider:              # §3 の env から組み立てる。同梱の実装はこれだけ
+    ...
+class PrunableDynamoDBSaver(DynamoDBSaver):     # prune/aprune（keep_latest・delete）を足す。§4.2
     ...
 ```
 
@@ -100,7 +106,10 @@ class DynamoDBCheckpointerProvider:              # §3 の env から組み立�
   別の保存先が要るようになったら、`AEGRA_CHECKPOINT_BACKEND` の値を増やす
 - `for_tenant` は saver をテナントごとにキャッシュする。STS の認証情報の期限が近づいたら作り直す
 - テーブルが無い、または認証情報が取れないテナントは**例外**にする。その場でテーブルを作らない
-  （サーバーに `CreateTable` の権限を持たせないため）
+  （サーバーに `CreateTable` の権限を持たせないため）。saver を作るときに `DescribeTable` を1回呼んで確かめ、
+  無ければ `TenantCheckpointTableMissingError`、STS に断られたら `TenantCheckpointCredentialsError`
+  （どちらも `TenantCheckpointerError`）。HTTP では **403**（`forbidden`、本文にテーブル名は出さない。
+  レジストリに断られたテナントの 403 と同じ扱い）。run の中で起きれば run は `error` で終わる
 - 依存: `langgraph-checkpoint-aws` を extra `dynamodb` に入れる。既定のインストールには入れない
 
 ### 4.2 振り分けチェックポインタ
@@ -131,14 +140,15 @@ langgraph-checkpoint 4.1（`uv.lock` は 4.1.1）のメソッドを、すべて�
 
 | 箇所 | スコープ | 変更 |
 |---|---|---|
-| `core/database.py:85` で `AsyncPostgresSaver` を作る所 | 起動時 | `dynamodb` なら `TenantRoutingCheckpointer(DynamoDBCheckpointerProvider(settings))` を作る。`setup()` は store だけにする |
-| `services/langgraph_service.py:355` でグラフに渡す所 | tenant | 変更なし（振り分けチェックポインタがそのまま渡る） |
-| `api/threads.py:936` の `adelete_thread` | tenant | 変更なし |
-| `services/run_cleanup.py:70` の `adelete_thread` | 呼び出し元から継承（バックグラウンドの後片付け） | 実装時に tenant スコープを継承していることをテストで固定する |
-| `services/thread_ttl.py:188` の `adelete_thread` | **system**（テナントをまたぐ掃除） | §5.2 |
-| `services/thread_ttl.py:150` `_prune_checkpoint_history`（チェックポイントのテーブルを直接 SQL で消す） | **system** | §5.2。生 SQL をやめ `aprune(..., strategy="keep_latest")` に置き換える |
-| `core/health.py:94,141` の `aget_tuple("health-check")` | system | `provider.health()` に置き換える |
-| `core/tenancy/rls.py:31-33` で RLS をかけるテーブルの一覧 | 有効化の CLI | `dynamodb` のときはチェックポイントの3テーブルを外す（そもそも作られない） |
+| `core/database.py` で `AsyncPostgresSaver` を作る所 | 起動時 | `dynamodb` なら `build_tenant_checkpointer(settings.checkpoint)`（振り分けチェックポインタ）。`setup()` は store だけ |
+| `main.py` の lifespan 先頭 | 起動時 | `ensure_checkpoint_backend_available()`（§3 の RLS フラグ・extra の確認）。`TenantCheckpointerError` → 403 のハンドラ |
+| `services/langgraph_service.py` でグラフに渡す所 | tenant | 変更なし（振り分けチェックポインタがそのまま渡る） |
+| `api/threads.py` の `adelete_thread` | tenant | 変更なし。state/history 系7箇所の `except Exception`（500 に包む）だけ `TenantCheckpointerError` を素通しにした |
+| `services/run_cleanup.py` の `adelete_thread` | 呼び出し元から継承（バックグラウンドの後片付け） | 変更なし。tenant スコープを継承することをテストで固定（`test_run_cleanup_scope.py`） |
+| `services/thread_ttl.py` の `adelete_thread` | **system**（テナントをまたぐ掃除） | §5.2。`dynamodb` のときだけ1件ごとに `tenant_scope` に入り直す |
+| `services/thread_ttl.py` `_prune_checkpoint_history`（生 SQL） | **system** | `dynamodb` のときは `aprune([thread_id], strategy="keep_latest")`。`postgres` は生 SQL のまま（動きを変えない） |
+| `core/health.py` の `aget_tuple("health-check")` | system | 振り分けなら `provider.health()`（失敗 = unhealthy / `/ready` 503）。`postgres` は今までどおり |
+| `core/tenancy/rls.py` で RLS をかけるテーブルの一覧 | 有効化の CLI | `enable_tenant_rls(tables=None)` の既定が `isolated_tables_for_settings()`。`dynamodb` ではチェックポイントの3テーブルを外す（そもそも作られない） |
 
 ---
 
@@ -154,9 +164,11 @@ langgraph-checkpoint 4.1（`uv.lock` は 4.1.1）のメソッドを、すべて�
 スレッド TTL の掃除は system スコープで、全テナントの期限切れスレッドを処理する。
 Postgres なら RLS の system ポリシーで1本の SQL で済むが、テーブルがテナントごとに分かれるとそうはいかない。
 
-- 期限切れのスレッドを取る SQL（`_expired_claim_stmt`）で `thread.tenant_id` も取る
-- 1件ごとに `with tenant_scope(row.tenant_id):` に入り直してから `adelete_thread` / `aprune` を呼ぶ。
-  cron の発火（RLS 設計書 §3）と同じ形
+- 期限切れのスレッドを取る SQL（`_expired_claim_stmt`）で `thread.tenant_id` も取る（バックエンドによらず）
+- `dynamodb` のときだけ、1件ごとに `with tenant_scope(row.tenant_id):` に入り直してから `adelete_thread` / `aprune` を呼ぶ。
+  cron の発火（RLS 設計書 §3）と同じ形。`postgres` は今までどおり system スコープのまま
+  （claim のトランザクションは SQLAlchemy 側で system のまま進む。スコープを変えるのはチェックポイント側だけ）
+- `tenant_id` が無い行は、その1件だけ失敗として数え、次の claim へ進む
 - system スコープのまま振り分けチェックポインタを呼んだらエラーにする。
   「system なら全テーブルを見る」という抜け道は作らない
 
@@ -195,8 +207,13 @@ Aegra に入るのは §4.1 の `DynamoDBCheckpointerProvider` まで。テー�
   サーバー自身の認証情報（ECS のタスクロールなど）には、このロールを引き受ける権限だけを持たせる
 - ロールのポリシー（IaC 側）は `Resource` を `arn:aws:dynamodb:<region>:<acct>:table/<prefix>${aws:PrincipalTag/tenant_id}` に限る。
   S3 退避のオブジェクトのキーも `${aws:PrincipalTag/tenant_id}/` で始まるものに限る
-- 認証情報は期限の手前で更新し、テナントごとにキャッシュする。テナント数が約100なら件数は問題にならない
-- `health()` は、引き受けたロールで DynamoDB に1回問い合わせる程度にする。全テナントのテーブルは見ない
+- 認証情報は期限の手前（5分前）で更新し、テナントごとにキャッシュする。テナント数が約100なら件数は問題にならない。
+  `RoleSessionName` は `aegra-{tenant_id}`（64文字で切る）、`DurationSeconds` は 3600
+- ロールに要る権限（IaC 側）: 自テーブルへの読み書きに加えて **`dynamodb:DescribeTable`**（saver 生成時の確認）。
+  `AEGRA_DYNAMODB_TTL_SECONDS` を設定すると `DynamoDBSaver` が S3 バケットのライフサイクル設定を読み書きしようとする
+  （`s3:GetLifecycleConfiguration` / `PutLifecycleConfiguration`。無くても警告ログだけで動く）
+- `health()` は、直近に使ったテナントの saver で `DescribeTable` を1回。まだどのテナントも使っていなければ
+  実 AWS では `sts:GetCallerIdentity`、Local では `ListTables(Limit=1)`。全テナントのテーブルは見ない
 
 ### 6.2 テナントのライフサイクル
 
@@ -217,13 +234,15 @@ Aegra に入るのは §4.1 の `DynamoDBCheckpointerProvider` まで。テー�
 
 ## 7. テスト
 
-| レベル | 内容 |
-|---|---|
-| unit | 振り分け: tenant スコープ → そのテナントの saver、system スコープ → エラー、スコープ無し → `DbScopeMissingError`。全メソッドを対象にする |
-| unit | `run_in_executor` の中から呼ばれても、委譲前に決めたテナントが使われる |
-| unit | TTL の掃除が1件ごとに tenant スコープへ入り直す。生 SQL が呼ばれない |
-| E2E（DynamoDB Local） | `aegra-rls-sample` の `make demo` 2項目め（他テナントの state は 404）がそのまま通る。テーブルが2つでき、相手のテーブルに行が無い |
-| E2E（実 AWS、手動） | テナント A の認証情報で B のテーブルを読むと `AccessDenied`。DynamoDB Local は IAM を評価しないので、ここは実環境でしか確かめられない |
+| レベル | 内容 | 場所 |
+|---|---|---|
+| unit | 設定の検証4条件と起動時の確認 | `tests/unit/test_settings.py`（`TestCheckpointSettings`）、`test_core/test_tenancy/test_checkpointer_startup.py`、`test_main.py` |
+| unit | provider: テナントごとのキャッシュ、STS のタグ・期限前の作り直し、endpoint 時は STS 無し、テーブル無し/認証不可は例外で作らない、`health()`、prune の keep_latest | `test_core/test_tenancy/test_dynamodb_provider.py`（boto3 は偽セッション） |
+| unit | 振り分け: tenant スコープ → そのテナントの saver、system → `SystemScopeCheckpointerError`、スコープ無し → `DbScopeMissingError`。非同期9・同期9の全メソッド（基底クラスの公開メソッドを網羅していることも検査）、`run_in_executor` の中でも委譲前のテナント | `test_core/test_tenancy/test_routing_checkpointer.py` |
+| unit | TTL の掃除が `dynamodb` では1件ごとに tenant スコープへ入り直し `aprune` を呼ぶ（生 SQL 無し）、`postgres` は system のまま。`run_cleanup` のスコープ継承。RLS の対象テーブル。`database.py` の分岐 | `test_services/test_thread_ttl.py`、`test_core/test_tenancy/test_run_cleanup_scope.py`、`test_core/test_tenancy/test_rls.py`、`test_core/test_database_manager.py` |
+| integration | `/health`・`/ready` が provider 経由、`TenantCheckpointerError` → 403（delete・state・history） | `tests/integration/test_health_checkpoint_backend.py`、`test_api/test_threads_tenant_checkpointer_error.py` |
+| E2E（DynamoDB Local） | `docker-compose.tenant-dynamodb.yml` ＋ host のサーバー（手順はファイル先頭）。2テナントで run → 相手の state/history/delete は 404、自分のテーブルにだけアイテム、削除・`/threads/prune`（delete・keep_latest）でそのテーブルからだけ消える、テーブル無しテナントは run が `error`・state/history/delete が 403 | `tests/e2e/test_tenant_rls/test_tenant_dynamodb_e2e.py`（`AEGRA_E2E_TENANT_DYNAMODB=1`） |
+| E2E（実 AWS、手動・未実施） | テナント A の認証情報で B のテーブルを読むと `AccessDenied`。DynamoDB Local は IAM を評価しないので、ここは実環境でしか確かめられない | — |
 
 ---
 
@@ -249,9 +268,17 @@ Aegra に入るのは §4.1 の `DynamoDBCheckpointerProvider` まで。テー�
 
 ---
 
-## 9. 未決事項
+## 9. 未決事項・残作業
 
-- 1チェックポイントあたりの DynamoDB の書き込みコスト（オンデマンド課金）が run の頻度で許容範囲か（§8 のアイテム数から見積もる）
+- **実 AWS での確認（未実施）**: `AssumeRole`＋`TagSession` のロールポリシー（`${aws:PrincipalTag/tenant_id}`）で
+  テナント A の認証情報から B のテーブルが `AccessDenied` になること。`DescribeTable`・S3 ライフサイクルの権限（§6.1）
+- 孤児の突き合わせジョブ（§5.3）。見つけたものを自動で消すか、報告だけにするか
+- 1チェックポイントあたりの DynamoDB の書き込みコスト（オンデマンド課金）が run の頻度で許容範囲か（§8 のアイテム数から見積もる）。
+  性能（同期 boto3 のスレッドプール、`alist(filter=)` の全件読み）も未計測
+- `keep_latest` の prune は `DeltaChannel` を使うグラフでは履歴の鎖を切る（langgraph-checkpoint の `prune` の注意書き）。
+  今の Postgres の生 SQL も同じ性質なので据え置き。`DeltaChannel` を使い始めるときに見直す
+- Docker イメージ（`deployments/docker/Dockerfile`）は `uv export --no-emit-project` で extra を入れないので、
+  `dynamodb` で動かすイメージには extra の追加が要る（今回は host で起動して E2E）
 - 孤児の突き合わせジョブで、見つけたものを自動で消すか、報告だけにするか
 - upstream に出すか。出すなら、振り分けの仕組み（§4.2）と `AEGRA_CHECKPOINT_BACKEND` を先に出し、
   DynamoDB 版は extra として別 PR にする
