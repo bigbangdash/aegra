@@ -163,7 +163,7 @@ async def test_cancel_listener_writes_end_event_under_the_runs_tenant(redis: Fak
 
     with (
         patch.dict("aegra_api.core.active_runs.active_runs", {RUN_ID: task}, clear=True),
-        patch.dict("aegra_api.services.redis_broker.active_run_tenants", {RUN_ID: "tenant-a"}, clear=True),
+        patch.dict("aegra_api.services.redis_event_codec.active_run_tenants", {RUN_ID: "tenant-a"}, clear=True),
         patch("aegra_api.services.redis_broker.explicit_run_cancellations", set()),
         patch.object(manager, "get_or_create_broker", return_value=broker),
         patch.object(manager, "allocate_event_id", new_callable=AsyncMock, return_value="evt-9"),
@@ -183,7 +183,7 @@ async def test_cancel_listener_skips_end_event_when_run_tenant_is_unknown(redis:
 
     with (
         patch.dict("aegra_api.core.active_runs.active_runs", {RUN_ID: task}, clear=True),
-        patch.dict("aegra_api.services.redis_broker.active_run_tenants", {}, clear=True),
+        patch.dict("aegra_api.services.redis_event_codec.active_run_tenants", {}, clear=True),
         patch("aegra_api.services.redis_broker.explicit_run_cancellations", set()),
         patch.object(manager, "get_or_create_broker", return_value=_broker()),
         patch.object(manager, "allocate_event_id", new_callable=AsyncMock, return_value="evt-9"),

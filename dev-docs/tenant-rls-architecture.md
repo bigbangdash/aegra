@@ -200,8 +200,9 @@ HTTP API use the same store instance, so both see only their own namespace.
 ## 7. Redis: per-tenant encryption
 
 RLS cannot see Redis, so run events (the replay list `cache:{run_id}` and the
-pub/sub channel) are encrypted. Only `services/redis_broker.py` changes; the
-in-memory broker (dev mode) is in-process and untouched.
+pub/sub channel) are encrypted. The envelope lives in `services/redis_event_codec.py`
+(`event_codec()` picks plain or sealed from the DB scope); `redis_broker.py` only
+calls it. The in-memory broker (dev mode) is in-process and untouched.
 
 ```
 flag on, message on the wire:
