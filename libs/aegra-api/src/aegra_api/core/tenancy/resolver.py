@@ -1,7 +1,7 @@
 """Resolve the authenticated user's tenant and scope requests to it.
 
-A tenant is resolved only at the three edges: the HTTP dependency, execute_run
-and each cron fire. Code below an edge reads it from the DB scope (the ORM
+A tenant is resolved only at the three edges: the HTTP dependency,
+execute_run_as_tenant and each cron fire. Code below an edge reads it from the DB scope (the ORM
 tenant_id default), so one request or run never resolves twice.
 """
 

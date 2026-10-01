@@ -10,7 +10,7 @@ anything that opens a DB connection, writes to Redis, or spawns a background tas
 
 Every unit of work declares a **DB scope** in a contextvar: one tenant, or the
 system with a written reason. The scope is resolved at the edge (HTTP dependency,
-`execute_run`, each cron fire) and every connection checkout reads it. A tenant
+`execute_run_as_tenant`, each cron fire) and every connection checkout reads it. A tenant
 scope switches the connection to the `aegra_tenant` role and sets the GUC
 `aegra.tenant_id`; PostgreSQL RLS policies compare rows against that GUC. A
 system scope keeps the login role and raises the GUC `aegra.system`; the tables
@@ -62,7 +62,7 @@ Entry points (the ONLY places a tenant is chosen):
 | Where | Tenant comes from |
 |-------|-------------------|
 | `core/tenancy/resolver.py::tenant_db_scope` — router dependency on threads, runs, stateless runs, assistants, crons, store, event streaming | `resolve_tenant_id(user)`: the configured resolver (default `user.org_id`). Rejected or malformed → 403 |
-| `services/run_executor.py::execute_run` | `resolve_tenant_id(job.user)`. Overrides the worker loop's system scope. Rejected → the run is finalized as `error` under system scope (no stream signals: they need the tenant key) |
+| `services/tenant_runs.py::execute_run_as_tenant` (wraps `run_executor.execute_run`; both executors call it) | `resolve_tenant_id(job.user)`. Overrides the worker loop's system scope. Rejected → the run is finalized as `error` under system scope (no stream signals: they need the tenant key) |
 | `services/cron_scheduler.py::_tick` per cron | `cron.tenant_id` stored at create time; `_fire_cron` asks the resolver to confirm it (same tenant, still accepted). Rejected or remapped → this occurrence is skipped (next_run advances, cron stays enabled). Malformed legacy value → skipped and logged, batch continues |
 
 Below the edges, nothing passes a tenant id around: every `tenant_id` column has
@@ -95,7 +95,7 @@ Contextvar gotchas that already bit us:
 - Sync graph nodes call the store from a worker thread → `TenantScopedPostgresStore.batch`
   captures the scope and `bind_scope`s it on the event loop.
 - Background tasks inherit the scope that was active at `create_task`. Loops
-  are created inside their `system_scope`, and `execute_run` re-scopes per job.
+  are created inside their `system_scope`, and `execute_run_as_tenant` re-scopes per job.
 
 ---
 
@@ -219,7 +219,7 @@ flag on, message on the wire:
   reads event payloads.
 - Flag on + unsealed message, or flag off + sealed message → error, not skip.
 - The cancel listener has no scope. It writes the `end` event under the run's
-  tenant from `core/active_runs.active_run_tenants`, which `execute_run`
+  tenant from `core/active_runs.active_run_tenants`, which `execute_run_as_tenant`
   fills and clears. `Task.get_context()` does not work: the worker runs the job in
   a child task and the outer task holds the worker loop's system scope. If the
   tenant is unknown, the listener logs and skips; the run's own cancel path still
