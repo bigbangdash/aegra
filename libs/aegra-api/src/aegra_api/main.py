@@ -33,7 +33,7 @@ from aegra_api.core.route_merger import (
     merge_exception_handlers,
     merge_lifespans,
 )
-from aegra_api.core.tenancy.checkpointer import ensure_checkpoint_backend_available
+from aegra_api.core.tenancy.checkpointer import TenantCheckpointerError, ensure_checkpoint_backend_available
 from aegra_api.core.tenancy.crypto import get_key_provider
 from aegra_api.middleware import ContentTypeFixMiddleware, StructLogMiddleware
 from aegra_api.models.errors import AgentProtocolError, get_error_type
@@ -199,8 +199,22 @@ async def general_exception_handler(_request: Request, exc: Exception) -> JSONRe
     )
 
 
+async def tenant_checkpointer_exception_handler(_request: Request, exc: TenantCheckpointerError) -> JSONResponse:
+    """A tenant without checkpoint storage is refused like an unknown tenant (403), not a 500."""
+    logger.error("Tenant checkpoint storage unavailable", tenant_id=exc.tenant_id, error=str(exc))
+    return JSONResponse(
+        status_code=403,
+        content=AgentProtocolError(
+            error=get_error_type(403),
+            message="Tenant checkpoint storage is not provisioned",
+            details=None,
+        ).model_dump(),
+    )
+
+
 exception_handlers = {
     HTTPException: agent_protocol_exception_handler,
+    TenantCheckpointerError: tenant_checkpointer_exception_handler,
     Exception: general_exception_handler,
 }
 

@@ -31,7 +31,8 @@ from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import ThreadTTL as ThreadTTLORM
 from aegra_api.core.orm import _get_session_maker
-from aegra_api.core.tenancy.scope import system_scope
+from aegra_api.core.tenancy.checkpointer import CHECKPOINT_BACKEND_ERRORS
+from aegra_api.core.tenancy.scope import system_scope, tenant_scope
 from aegra_api.models.threads import MAX_TTL_MINUTES
 from aegra_api.observability.metrics import THREAD_TTL_SWEPT
 from aegra_api.settings import settings
@@ -174,7 +175,10 @@ async def _apply_strategy(
 ) -> str:
     """Apply one expired row's strategy inside the claim transaction; return the outcome label."""
     if strategy == "keep_latest":
-        await _prune_checkpoint_history(thread_id)
+        if settings.checkpoint.dynamodb_enabled:
+            await db_manager.get_checkpointer().aprune([thread_id], strategy="keep_latest")
+        else:
+            await _prune_checkpoint_history(thread_id)
         # Re-arm: keep_latest is periodic compaction, not a one-shot.
         await session.execute(
             update(ThreadTTLORM)
@@ -197,7 +201,7 @@ def _expired_claim_stmt(
     user_id: str | None = None,
     auth_filter: ColumnElement[bool] | None = None,
     exclude_ids: Collection[str] = (),
-) -> Select[tuple[str, str, float]]:
+) -> Select[tuple[str, str, float, str | None]]:
     """Claim query for expired thread_ttl rows, locking thread_ttl AND thread.
 
     ``skip_locked`` partitions work across instances (and between the sweeper
@@ -215,8 +219,9 @@ def _expired_claim_stmt(
         )
         .exists()
     )
+    # tenant_id rides along so a per-tenant checkpoint backend can re-scope each item.
     stmt = (
-        select(ThreadTTLORM.thread_id, ThreadTTLORM.strategy, ThreadTTLORM.ttl_minutes)
+        select(ThreadTTLORM.thread_id, ThreadTTLORM.strategy, ThreadTTLORM.ttl_minutes, ThreadORM.tenant_id)
         .join(ThreadORM, ThreadORM.thread_id == ThreadTTLORM.thread_id)
         .where(
             ThreadTTLORM.expires_at <= now,
@@ -238,8 +243,18 @@ def _expired_claim_stmt(
     )
 
 
+def _item_scope(tenant_id: str | None) -> contextlib.AbstractContextManager[object]:
+    # Postgres prunes in the sweeper's system scope as before. DynamoDB has no
+    # cross-tenant view, so each item re-enters its own tenant (proposal §5.2).
+    if not settings.checkpoint.dynamodb_enabled:
+        return contextlib.nullcontext()
+    if not tenant_id:
+        raise ValueError("thread has no tenant_id; cannot route its checkpoints")
+    return tenant_scope(tenant_id)
+
+
 async def _process_expired_batch(
-    session: AsyncSession, stmt: Select[tuple[str, str, float]], now: datetime
+    session: AsyncSession, stmt: Select[tuple[str, str, float, str | None]], now: datetime
 ) -> tuple[int, int, int, list[str]]:
     """Claim and process one batch in a single transaction.
 
@@ -254,13 +269,14 @@ async def _process_expired_batch(
     deleted = 0
     pruned = 0
     failed_ids: list[str] = []
-    for thread_id, strategy, ttl_minutes in rows:
+    for thread_id, strategy, ttl_minutes, tenant_id in rows:
         try:
-            outcome = await _apply_strategy(
-                session, thread_id=thread_id, strategy=strategy, ttl_minutes=ttl_minutes, now=now
-            )
-        except (PsycopgError, OSError):
-            # Checkpointer-side failure on the other pool: this transaction is
+            with _item_scope(tenant_id):
+                outcome = await _apply_strategy(
+                    session, thread_id=thread_id, strategy=strategy, ttl_minutes=ttl_minutes, now=now
+                )
+        except (PsycopgError, OSError, ValueError, *CHECKPOINT_BACKEND_ERRORS):
+            # Checkpointer-side failure on the other backend: this transaction is
             # untouched — skip the item, retry it on a later claim.
             THREAD_TTL_SWEPT.labels(outcome="error").inc()
             logger.exception("Thread TTL item failed", thread_id=thread_id, strategy=strategy)

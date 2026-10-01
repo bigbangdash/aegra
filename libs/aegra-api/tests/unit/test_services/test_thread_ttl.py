@@ -12,6 +12,8 @@ from psycopg import Error as PsycopgError
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
+from aegra_api.core.tenancy.checkpointer import TenantCheckpointTableMissingError
+from aegra_api.core.tenancy.scope import current_db_scope, system_scope, tenant_scope
 from aegra_api.observability.metrics import THREAD_TTL_SWEPT
 from aegra_api.services.thread_ttl import (
     ThreadTTLConfig,
@@ -355,7 +357,7 @@ class TestFailureIsolation:
         db.get_checkpointer.return_value = checkpointer
 
         claim_result = MagicMock()
-        claim_result.all.return_value = [("t-1", "delete", 5.0), ("t-2", "delete", 5.0)]
+        claim_result.all.return_value = [("t-1", "delete", 5.0, None), ("t-2", "delete", 5.0, None)]
         session = AsyncMock()
         session.execute.side_effect = [claim_result, MagicMock()]
 
@@ -546,3 +548,127 @@ class TestPruneForUser:
         claim_sql = str(mock_batch.await_args_list[0].args[1].compile(dialect=postgresql.dialect()))
         assert "thread.user_id" in claim_sql
         assert "FOR UPDATE OF thread_ttl, thread SKIP LOCKED" in claim_sql
+
+
+class TestDynamoDBBackend:
+    """With per-tenant checkpoints each item re-enters its tenant and prunes through the saver."""
+
+    @pytest.fixture(autouse=True)
+    def _dynamodb_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings.checkpoint, "AEGRA_CHECKPOINT_BACKEND", "dynamodb")
+        monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_RLS_ENABLED", True)
+
+    @pytest.mark.asyncio
+    async def test_keep_latest_prunes_through_the_checkpointer_not_raw_sql(self) -> None:
+        checkpointer = AsyncMock()
+        pool, conn = _make_lg_pool()
+        db = MagicMock()
+        db.get_checkpointer.return_value = checkpointer
+        db.lg_pool = pool
+        session = AsyncMock()
+
+        with patch("aegra_api.services.thread_ttl.db_manager", db), tenant_scope("tenant-a"):
+            outcome = await _apply_strategy(
+                session, thread_id="t-1", strategy="keep_latest", ttl_minutes=30.0, now=datetime.now(UTC)
+            )
+
+        assert outcome == "pruned"
+        checkpointer.aprune.assert_awaited_once_with(["t-1"], strategy="keep_latest")
+        pool.connection.assert_not_called()
+        conn.execute.assert_not_awaited()
+        rearm_sql = str(session.execute.await_args_list[0].args[0].compile(dialect=postgresql.dialect()))
+        assert "UPDATE thread_ttl" in rearm_sql
+
+    @pytest.mark.asyncio
+    async def test_each_item_runs_in_its_own_tenant_scope(self) -> None:
+        seen: list[tuple[str, str | None]] = []
+
+        async def record(session: object, *, thread_id: str, **_: object) -> str:
+            seen.append((thread_id, current_db_scope().tenant_id))
+            return "deleted"
+
+        claim_result = MagicMock()
+        claim_result.all.return_value = [("t-1", "delete", 5.0, "tenant-a"), ("t-2", "delete", 5.0, "tenant-b")]
+        session = AsyncMock()
+        session.execute.return_value = claim_result
+
+        with (
+            patch("aegra_api.services.thread_ttl._apply_strategy", side_effect=record),
+            system_scope("thread TTL sweeper: cross-tenant expiry"),
+        ):
+            claimed, deleted, _pruned, failed_ids = await _process_expired_batch(
+                session, MagicMock(), datetime.now(UTC)
+            )
+            assert current_db_scope().is_system
+
+        assert (claimed, deleted, failed_ids) == (2, 2, [])
+        assert seen == [("t-1", "tenant-a"), ("t-2", "tenant-b")]
+
+    @pytest.mark.asyncio
+    async def test_row_without_a_tenant_is_skipped_and_the_batch_continues(self) -> None:
+        checkpointer = AsyncMock()
+        db = MagicMock()
+        db.get_checkpointer.return_value = checkpointer
+        claim_result = MagicMock()
+        claim_result.all.return_value = [("t-1", "delete", 5.0, None), ("t-2", "delete", 5.0, "tenant-b")]
+        session = AsyncMock()
+        session.execute.side_effect = [claim_result, MagicMock()]
+
+        errors_before = _swept_count("error")
+        with patch("aegra_api.services.thread_ttl.db_manager", db), system_scope("sweep"):
+            claimed, deleted, _pruned, failed_ids = await _process_expired_batch(
+                session, MagicMock(), datetime.now(UTC)
+            )
+
+        assert (claimed, deleted, failed_ids) == (2, 1, ["t-1"])
+        checkpointer.adelete_thread.assert_awaited_once_with("t-2")
+        assert _swept_count("error") == errors_before + 1
+        session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_tenant_without_checkpoint_table_is_skipped_and_the_batch_continues(self) -> None:
+        checkpointer = AsyncMock()
+        checkpointer.adelete_thread.side_effect = [TenantCheckpointTableMissingError("tenant-a", "ckpt-tenant-a"), None]
+        db = MagicMock()
+        db.get_checkpointer.return_value = checkpointer
+        claim_result = MagicMock()
+        claim_result.all.return_value = [("t-1", "delete", 5.0, "tenant-a"), ("t-2", "delete", 5.0, "tenant-b")]
+        session = AsyncMock()
+        session.execute.side_effect = [claim_result, MagicMock()]
+
+        with patch("aegra_api.services.thread_ttl.db_manager", db), system_scope("sweep"):
+            claimed, deleted, _pruned, failed_ids = await _process_expired_batch(
+                session, MagicMock(), datetime.now(UTC)
+            )
+
+        assert (claimed, deleted, failed_ids) == (2, 1, ["t-1"])
+        assert checkpointer.adelete_thread.await_count == 2
+
+
+class TestPostgresBackendKeepsItsScope:
+    """The default backend prunes in the sweeper's own scope, exactly as before."""
+
+    @pytest.mark.asyncio
+    async def test_items_stay_in_the_system_scope(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings.checkpoint, "AEGRA_CHECKPOINT_BACKEND", "postgres")
+        seen: list[bool] = []
+
+        async def record(session: object, *, thread_id: str, **_: object) -> str:
+            seen.append(current_db_scope().is_system)
+            return "deleted"
+
+        claim_result = MagicMock()
+        claim_result.all.return_value = [("t-1", "delete", 5.0, "tenant-a")]
+        session = AsyncMock()
+        session.execute.return_value = claim_result
+
+        with patch("aegra_api.services.thread_ttl._apply_strategy", side_effect=record), system_scope("sweep"):
+            await _process_expired_batch(session, MagicMock(), datetime.now(UTC))
+
+        assert seen == [True]
+
+    def test_claim_selects_the_thread_tenant(self) -> None:
+        stmt = _expired_claim_stmt(now=datetime.now(UTC), limit=10)
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+
+        assert "thread.tenant_id" in sql
