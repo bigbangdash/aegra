@@ -30,7 +30,7 @@ class TestLocalExecutor:
         mock_execute = AsyncMock()
 
         with (
-            patch("aegra_api.services.run_executor.execute_run", mock_execute),
+            patch("aegra_api.services.tenant_runs.execute_run_as_tenant", mock_execute),
             patch("aegra_api.services.local_executor.make_run_trace_context", return_value=None),
         ):
             job = _make_job()
