@@ -480,6 +480,55 @@ class TenantSettings(EnvBase):
     AEGRA_TENANT_REDIS_MASTER_KEY: SecretStr | None = None
 
 
+CHECKPOINT_BACKENDS: tuple[str, ...] = ("postgres", "dynamodb")
+
+
+class CheckpointSettings(EnvBase):
+    """Where LangGraph checkpoints live (dev-docs/tenant-dynamodb-checkpoints-proposal.md).
+
+    `postgres` (default) keeps the shared tables. `dynamodb` routes each tenant's
+    checkpoints to its own table `{AEGRA_DYNAMODB_TABLE_PREFIX}{tenant_id}` and
+    needs tenant RLS plus the `aegra-api[dynamodb]` extra (checked at startup by
+    core.tenancy.checkpointer). With AEGRA_DYNAMODB_ENDPOINT_URL (DynamoDB Local)
+    the default credentials are used instead of assuming the tenant role.
+    """
+
+    AEGRA_CHECKPOINT_BACKEND: LowerStr = "postgres"
+    AEGRA_DYNAMODB_TABLE_PREFIX: str = "aegra-ckpt-"
+    AEGRA_DYNAMODB_REGION: str | None = None
+    AEGRA_DYNAMODB_TENANT_ROLE_ARN: str | None = None
+    AEGRA_DYNAMODB_S3_BUCKET: str | None = None
+    AEGRA_DYNAMODB_TTL_SECONDS: int | None = Field(default=None, gt=0)
+    AEGRA_DYNAMODB_ENDPOINT_URL: str | None = None
+
+    @property
+    def dynamodb_enabled(self) -> bool:
+        return self.AEGRA_CHECKPOINT_BACKEND == "dynamodb"
+
+    @model_validator(mode="after")
+    def _validate_backend(self) -> "CheckpointSettings":
+        if self.AEGRA_CHECKPOINT_BACKEND not in CHECKPOINT_BACKENDS:
+            raise ValueError(
+                f"AEGRA_CHECKPOINT_BACKEND must be one of {CHECKPOINT_BACKENDS}, got {self.AEGRA_CHECKPOINT_BACKEND!r}"
+            )
+        if not self.dynamodb_enabled:
+            return self
+        if not self.AEGRA_DYNAMODB_TABLE_PREFIX:
+            raise ValueError("AEGRA_DYNAMODB_TABLE_PREFIX must not be empty")
+        if not self.AEGRA_DYNAMODB_REGION:
+            raise ValueError("AEGRA_DYNAMODB_REGION is required when AEGRA_CHECKPOINT_BACKEND=dynamodb")
+        if self.AEGRA_DYNAMODB_ENDPOINT_URL:
+            # Local endpoints evaluate no IAM; a role here means production env leaked into a Local setup.
+            if self.AEGRA_DYNAMODB_TENANT_ROLE_ARN:
+                raise ValueError("AEGRA_DYNAMODB_ENDPOINT_URL and AEGRA_DYNAMODB_TENANT_ROLE_ARN cannot both be set")
+            return self
+        if not self.AEGRA_DYNAMODB_TENANT_ROLE_ARN:
+            raise ValueError("AEGRA_DYNAMODB_TENANT_ROLE_ARN is required when AEGRA_CHECKPOINT_BACKEND=dynamodb")
+        if not self.AEGRA_DYNAMODB_S3_BUCKET:
+            raise ValueError("AEGRA_DYNAMODB_S3_BUCKET is required when AEGRA_CHECKPOINT_BACKEND=dynamodb")
+        return self
+
+
 class Settings:
     """Container object that instantiates all application settings groups."""
 
@@ -495,6 +544,7 @@ class Settings:
         self.thread_ttl = ThreadTTLSettings()
         self.event_streaming = EventStreamingSettings()
         self.tenant = TenantSettings()
+        self.checkpoint = CheckpointSettings()
 
 
 settings = Settings()

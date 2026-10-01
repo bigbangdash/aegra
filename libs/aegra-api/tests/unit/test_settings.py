@@ -8,6 +8,7 @@ from sqlalchemy.engine import make_url
 
 from aegra_api.settings import (
     AppSettings,
+    CheckpointSettings,
     CronSettings,
     DatabaseSettings,
     RedisSettings,
@@ -689,3 +690,126 @@ class TestMaxSearchLimit:
         monkeypatch.setenv("MAX_SEARCH_LIMIT", "-1")
         with pytest.raises(ValidationError):
             AppSettings(_env_file=None)
+
+
+class TestCheckpointSettings:
+    """AEGRA_CHECKPOINT_BACKEND and the DynamoDB variables it requires."""
+
+    _VARS = (
+        "AEGRA_CHECKPOINT_BACKEND",
+        "AEGRA_DYNAMODB_TABLE_PREFIX",
+        "AEGRA_DYNAMODB_REGION",
+        "AEGRA_DYNAMODB_TENANT_ROLE_ARN",
+        "AEGRA_DYNAMODB_S3_BUCKET",
+        "AEGRA_DYNAMODB_TTL_SECONDS",
+        "AEGRA_DYNAMODB_ENDPOINT_URL",
+    )
+
+    @pytest.fixture(autouse=True)
+    def _clear_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for var in self._VARS:
+            monkeypatch.delenv(var, raising=False)
+
+    @staticmethod
+    def _aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AEGRA_CHECKPOINT_BACKEND", "dynamodb")
+        monkeypatch.setenv("AEGRA_DYNAMODB_REGION", "ap-northeast-1")
+        monkeypatch.setenv("AEGRA_DYNAMODB_TENANT_ROLE_ARN", "arn:aws:iam::123456789012:role/aegra-tenant")
+        monkeypatch.setenv("AEGRA_DYNAMODB_S3_BUCKET", "aegra-ckpt-offload")
+
+    def test_defaults_to_postgres_with_no_dynamodb_requirements(self) -> None:
+        s = CheckpointSettings()
+
+        assert s.AEGRA_CHECKPOINT_BACKEND == "postgres"
+        assert s.dynamodb_enabled is False
+        assert s.AEGRA_DYNAMODB_TABLE_PREFIX == "aegra-ckpt-"
+        assert s.AEGRA_DYNAMODB_REGION is None
+        assert s.AEGRA_DYNAMODB_TTL_SECONDS is None
+
+    def test_backend_is_normalized_to_lowercase(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AEGRA_CHECKPOINT_BACKEND", " Postgres ")
+
+        assert CheckpointSettings().AEGRA_CHECKPOINT_BACKEND == "postgres"
+
+    def test_rejects_unknown_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AEGRA_CHECKPOINT_BACKEND", "redis")
+
+        with pytest.raises(ValidationError, match="AEGRA_CHECKPOINT_BACKEND must be one of"):
+            CheckpointSettings()
+
+    def test_postgres_ignores_dynamodb_variables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AEGRA_DYNAMODB_ENDPOINT_URL", "http://localhost:8100")
+        monkeypatch.setenv("AEGRA_DYNAMODB_TENANT_ROLE_ARN", "arn:aws:iam::123456789012:role/aegra-tenant")
+
+        assert CheckpointSettings().dynamodb_enabled is False
+
+    def test_dynamodb_with_role_and_bucket_is_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._aws_env(monkeypatch)
+
+        s = CheckpointSettings()
+
+        assert s.dynamodb_enabled is True
+        assert s.AEGRA_DYNAMODB_REGION == "ap-northeast-1"
+        assert s.AEGRA_DYNAMODB_ENDPOINT_URL is None
+
+    @pytest.mark.parametrize(
+        "missing", ["AEGRA_DYNAMODB_REGION", "AEGRA_DYNAMODB_TENANT_ROLE_ARN", "AEGRA_DYNAMODB_S3_BUCKET"]
+    )
+    def test_dynamodb_requires_region_role_and_bucket(self, monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
+        self._aws_env(monkeypatch)
+        monkeypatch.delenv(missing)
+
+        with pytest.raises(ValidationError, match=f"{missing} is required"):
+            CheckpointSettings()
+
+    def test_dynamodb_rejects_blank_region(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._aws_env(monkeypatch)
+        monkeypatch.setenv("AEGRA_DYNAMODB_REGION", "")
+
+        with pytest.raises(ValidationError, match="AEGRA_DYNAMODB_REGION is required"):
+            CheckpointSettings()
+
+    def test_dynamodb_rejects_empty_table_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._aws_env(monkeypatch)
+        monkeypatch.setenv("AEGRA_DYNAMODB_TABLE_PREFIX", "")
+
+        with pytest.raises(ValidationError, match="AEGRA_DYNAMODB_TABLE_PREFIX must not be empty"):
+            CheckpointSettings()
+
+    def test_local_endpoint_needs_neither_role_nor_bucket(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AEGRA_CHECKPOINT_BACKEND", "dynamodb")
+        monkeypatch.setenv("AEGRA_DYNAMODB_REGION", "us-east-1")
+        monkeypatch.setenv("AEGRA_DYNAMODB_ENDPOINT_URL", "http://localhost:8100")
+
+        s = CheckpointSettings()
+
+        assert s.AEGRA_DYNAMODB_TENANT_ROLE_ARN is None
+        assert s.AEGRA_DYNAMODB_S3_BUCKET is None
+
+    def test_local_endpoint_still_requires_region(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AEGRA_CHECKPOINT_BACKEND", "dynamodb")
+        monkeypatch.setenv("AEGRA_DYNAMODB_ENDPOINT_URL", "http://localhost:8100")
+
+        with pytest.raises(ValidationError, match="AEGRA_DYNAMODB_REGION is required"):
+            CheckpointSettings()
+
+    def test_rejects_endpoint_together_with_tenant_role(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._aws_env(monkeypatch)
+        monkeypatch.setenv("AEGRA_DYNAMODB_ENDPOINT_URL", "http://localhost:8100")
+
+        with pytest.raises(ValidationError, match="cannot both be set"):
+            CheckpointSettings()
+
+    @pytest.mark.parametrize("value", ["0", "-5", "abc"])
+    def test_rejects_non_positive_ttl(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+        self._aws_env(monkeypatch)
+        monkeypatch.setenv("AEGRA_DYNAMODB_TTL_SECONDS", value)
+
+        with pytest.raises(ValidationError):
+            CheckpointSettings()
+
+    def test_accepts_positive_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._aws_env(monkeypatch)
+        monkeypatch.setenv("AEGRA_DYNAMODB_TTL_SECONDS", "604800")
+
+        assert CheckpointSettings().AEGRA_DYNAMODB_TTL_SECONDS == 604800

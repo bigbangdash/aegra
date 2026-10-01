@@ -199,6 +199,20 @@ AEGRA_THREAD_TTL='{"strategy": "keep_latest", "default_ttl": 1440, "sweep_interv
 
 See the [tenant isolation guide](/guides/tenant-isolation) for setup order and operational notes.
 
+## Checkpoint backend
+
+Experimental. Requires `AEGRA_TENANT_RLS_ENABLED=true` and the `aegra-api[dynamodb]` extra; the server refuses to start otherwise. Tables are created outside Aegra (one per tenant, string keys `PK` and `SK`, TTL attribute `ttl`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AEGRA_CHECKPOINT_BACKEND` | `postgres` | `postgres` keeps LangGraph checkpoints in the shared Postgres tables. `dynamodb` stores each tenant's checkpoints in its own DynamoDB table; threads, runs, assistants, crons and the store stay in Postgres |
+| `AEGRA_DYNAMODB_TABLE_PREFIX` | `aegra-ckpt-` | Table name is the prefix followed by the tenant id |
+| `AEGRA_DYNAMODB_REGION` | — | AWS region of the tables. Required with `dynamodb` |
+| `AEGRA_DYNAMODB_TENANT_ROLE_ARN` | — | IAM role assumed per tenant with `sts:AssumeRole` and a `tenant_id` session tag. Required unless `AEGRA_DYNAMODB_ENDPOINT_URL` is set, and rejected together with it |
+| `AEGRA_DYNAMODB_S3_BUCKET` | — | Bucket for checkpoints larger than 350KB (a DynamoDB item holds at most 400KB). Required unless `AEGRA_DYNAMODB_ENDPOINT_URL` is set |
+| `AEGRA_DYNAMODB_TTL_SECONDS` | — | When set, every item carries a DynamoDB TTL this many seconds ahead |
+| `AEGRA_DYNAMODB_ENDPOINT_URL` | — | DynamoDB Local endpoint. The server then uses the default AWS credentials instead of assuming the tenant role |
+
 ## Prometheus metrics
 
 | Variable | Default | Description |

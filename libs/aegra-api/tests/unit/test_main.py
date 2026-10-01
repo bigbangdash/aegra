@@ -227,3 +227,30 @@ async def test_lifespan_skips_ttl_sweeper_without_config() -> None:
 
         mock_sweeper.start.assert_not_awaited()
         mock_sweeper.stop.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_lifespan_refuses_dynamodb_backend_before_touching_the_db(monkeypatch) -> None:
+    """A checkpoint backend that cannot route must fail before migrations or pools."""
+    import aegra_api.main as main_module
+    from aegra_api.core.tenancy import checkpointer
+    from aegra_api.core.tenancy.checkpointer import CheckpointBackendError
+
+    importlib.reload(main_module)
+    # Patch the settings object the guard reads; other tests reload aegra_api.settings.
+    monkeypatch.setattr(checkpointer.settings.checkpoint, "AEGRA_CHECKPOINT_BACKEND", "dynamodb")
+    monkeypatch.setattr(checkpointer.settings.tenant, "AEGRA_TENANT_RLS_ENABLED", False)
+
+    with (
+        patch("aegra_api.main.run_migrations_async", new_callable=AsyncMock) as mock_migrations,
+        patch("aegra_api.main.db_manager") as mock_db_manager,
+    ):
+        mock_db_manager.initialize = AsyncMock()
+
+        with pytest.raises(CheckpointBackendError):
+            async with main_module.lifespan(MagicMock()):
+                pass
+
+        mock_migrations.assert_not_called()
+        mock_db_manager.initialize.assert_not_called()
