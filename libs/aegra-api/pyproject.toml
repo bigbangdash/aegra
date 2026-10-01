@@ -62,6 +62,10 @@ dependencies = [
     "cryptography>=44.0.0",
 ]
 
+[project.optional-dependencies]
+# Per-tenant DynamoDB checkpoints (AEGRA_CHECKPOINT_BACKEND=dynamodb); not in the default install.
+dynamodb = ["langgraph-checkpoint-aws>=1.2.3"]
+
 [project.urls]
 Homepage = "https://github.com/aegra/aegra"
 Documentation = "https://github.com/aegra/aegra#readme"
