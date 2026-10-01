@@ -23,6 +23,7 @@ from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import ThreadTTL as ThreadTTLORM
 from aegra_api.core.orm import _get_session_maker, get_session
+from aegra_api.core.tenancy.checkpointer import TenantCheckpointerError
 from aegra_api.core.tenancy.resolver import tenant_scope_dependency
 from aegra_api.models import (
     Thread,
@@ -479,13 +480,13 @@ async def get_thread_state(
                 )
 
                 return thread_state
-        except HTTPException:
+        except (HTTPException, TenantCheckpointerError):
             raise
         except Exception as e:
             logger.exception("Failed to retrieve latest state for thread '%s'", thread_id)
             raise HTTPException(500, f"Failed to retrieve thread state: {str(e)}") from e
 
-    except HTTPException:
+    except (HTTPException, TenantCheckpointerError):
         raise
     except Exception as e:
         logger.exception("Unexpected error retrieving latest state for thread '%s'", thread_id)
@@ -615,13 +616,13 @@ async def update_thread_state(
 
                 return ThreadStateUpdateResponse(checkpoint=checkpoint_info)
 
-        except HTTPException:
+        except (HTTPException, TenantCheckpointerError):
             raise
         except Exception as e:
             logger.exception("Failed to update state for thread '%s'", thread_id)
             raise HTTPException(500, f"Failed to update thread state: {str(e)}") from e
 
-    except HTTPException:
+    except (HTTPException, TenantCheckpointerError):
         raise
     except Exception as e:
         logger.exception("Unexpected error updating state for thread '%s'", thread_id)
@@ -682,7 +683,7 @@ async def get_thread_state_at_checkpoint(
                 )
 
                 return thread_checkpoint
-        except HTTPException:
+        except (HTTPException, TenantCheckpointerError):
             raise
         except Exception as e:
             logger.exception(
@@ -695,7 +696,7 @@ async def get_thread_state_at_checkpoint(
                 f"Failed to retrieve state at checkpoint '{checkpoint_id}': {str(e)}",
             ) from e
 
-    except HTTPException:
+    except (HTTPException, TenantCheckpointerError):
         raise
     except Exception as e:
         logger.exception("Error retrieving checkpoint '%s' for thread '%s'", checkpoint_id, thread_id)
@@ -814,7 +815,7 @@ async def get_thread_history_post(
 
         return thread_states
 
-    except HTTPException:
+    except (HTTPException, TenantCheckpointerError):
         raise
     except Exception as e:
         logger.exception("Error in history POST for thread %s", thread_id)

@@ -1,6 +1,8 @@
 """A tenant without checkpoint storage gets a defined 403, not a 500 (proposal §4.1)."""
 
-from unittest.mock import AsyncMock, MagicMock
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -55,3 +57,39 @@ def test_delete_thread_returns_403_when_the_tenant_table_is_missing(monkeypatch:
     assert body["error"] == "forbidden"
     assert body["message"] == "Tenant checkpoint storage is not provisioned"
     assert "aegra-ckpt-org-1" not in response.text
+
+
+def _get_graph_raising(exc: Exception) -> MagicMock:
+    mock = MagicMock()
+
+    @asynccontextmanager
+    async def raising(*_args: object, **_kwargs: object) -> AsyncIterator[object]:
+        raise exc
+        yield  # pragma: no cover - makes this an async generator
+
+    mock.side_effect = lambda *args, **kwargs: raising(*args, **kwargs)
+    return mock
+
+
+@pytest.mark.parametrize("path", ["/threads/thread-1/state", "/threads/thread-1/history"])
+def test_state_routes_pass_the_error_through_instead_of_a_500(path: str) -> None:
+    thread = DummyThread("thread-1", "idle", {"graph_id": "stress_test"}, "test-user")
+    thread.metadata_json = {"graph_id": "stress_test"}
+
+    class ThreadSession(DummySessionBase):
+        async def scalar(self, _stmt: object) -> object:
+            return thread
+
+    app = create_test_app(include_runs=False, include_threads=True)
+    app.add_exception_handler(TenantCheckpointerError, tenant_checkpointer_exception_handler)
+    app.dependency_overrides[core_get_session] = override_get_session_dep(ThreadSession)
+    client = make_client(app)
+
+    with patch("aegra_api.services.langgraph_service.get_langgraph_service") as get_service:
+        get_service.return_value.get_graph = _get_graph_raising(
+            TenantCheckpointTableMissingError("org-1", "aegra-ckpt-org-1")
+        )
+        response = client.get(path)
+
+    assert response.status_code == 403
+    assert response.json()["error"] == "forbidden"
