@@ -63,7 +63,7 @@ Entry points (the ONLY places a tenant is chosen):
 |-------|-------------------|
 | `core/tenancy/resolver.py::tenant_db_scope` — router dependency on threads, runs, stateless runs, assistants, crons, store, event streaming | `resolve_tenant_id(user)`: the configured resolver (default `user.org_id`). Rejected or malformed → 403 |
 | `services/tenant_runs.py::execute_run_as_tenant` (wraps `run_executor.execute_run`; both executors call it) | `resolve_tenant_id(job.user)`. Overrides the worker loop's system scope. Rejected → the run is finalized as `error` under system scope (no stream signals: they need the tenant key) |
-| `services/cron_scheduler.py::_tick` per cron | `cron.tenant_id` stored at create time; `_fire_cron` asks the resolver to confirm it (same tenant, still accepted). Rejected or remapped → this occurrence is skipped (next_run advances, cron stays enabled). Malformed legacy value → skipped and logged, batch continues |
+| `services/tenant_crons.py` (called per cron from `cron_scheduler._tick` and `_fire_cron`) | `cron.tenant_id` stored at create time; `skip_if_tenant_rejected` asks the resolver to confirm it (same tenant, still accepted). Rejected or remapped → this occurrence is skipped (next_run advances, cron stays enabled). Malformed legacy value → skipped and logged, batch continues |
 
 Below the edges, nothing passes a tenant id around: every `tenant_id` column has
 `default=scoped_tenant_id` (`core/orm.py`), so the ORM fills it from the current

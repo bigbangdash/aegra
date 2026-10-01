@@ -24,8 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegra_api.core.orm import Cron as CronORM
 from aegra_api.core.orm import _get_session_maker
-from aegra_api.core.tenancy.resolver import TenantRejectedError, resolve_tenant_id
-from aegra_api.core.tenancy.scope import is_valid_tenant_id, system_scope, tenant_scope
+from aegra_api.core.tenancy.scope import system_scope
 from aegra_api.models import RunCreate, User
 from aegra_api.services.cron_service import (
     CronService,
@@ -33,6 +32,7 @@ from aegra_api.services.cron_service import (
 )
 from aegra_api.services.run_cleanup import delete_thread_by_id, schedule_background_cleanup
 from aegra_api.services.run_preparation import _prepare_run
+from aegra_api.services.tenant_crons import cron_fire_scope, skip_if_tenant_rejected
 from aegra_api.settings import settings
 
 logger = structlog.getLogger(__name__)
@@ -152,14 +152,9 @@ class CronScheduler:
         logger.info("Cron tick: found due jobs", count=len(due_crons))
 
         for cron in due_crons:
-            # Rows saved before tenant ids were validated would make tenant_scope raise
-            # and abort the whole batch; skip just that cron.
-            if cron.tenant_id and not is_valid_tenant_id(cron.tenant_id):
-                logger.error("Skipping cron with a malformed tenant_id", cron_id=cron.cron_id)
+            fire_scope = cron_fire_scope(cron)
+            if fire_scope is None:
                 continue
-            # Fire as the cron's tenant. A cron without one stays in the system scope,
-            # where _prepare_run refuses to create a run under RLS.
-            fire_scope = tenant_scope(cron.tenant_id) if cron.tenant_id else contextlib.nullcontext()
             with fire_scope:
                 async with maker() as cron_session:
                     try:
@@ -204,11 +199,7 @@ class CronScheduler:
             is_authenticated=True,
             org_id=cron.tenant_id,
         )
-        rls_on = settings.tenant.AEGRA_TENANT_RLS_ENABLED
-        if rls_on and cron.tenant_id and (reason := await _tenant_rejection(user, cron.tenant_id)):
-            # Skip this occurrence but keep the cron enabled, so a reactivated tenant resumes.
-            logger.warning("Skipping cron fire: tenant rejected", cron_id=cron.cron_id, reason=reason)
-            await CronService(session).advance_next_run(cron)
+        if await skip_if_tenant_rejected(session, cron, user):
             return
 
         try:
@@ -259,17 +250,6 @@ class CronScheduler:
                 thread_id=thread_id,
                 cron_id=cron.cron_id,
             )
-
-
-async def _tenant_rejection(user: User, stored_tenant_id: str) -> str | None:
-    # The stored tenant scopes the fire; the resolver only confirms it is still served, and as the same tenant.
-    try:
-        resolved = await resolve_tenant_id(user)
-    except TenantRejectedError as e:
-        return str(e)
-    if resolved != stored_tenant_id:
-        return f"resolver now maps this cron's owner to tenant {resolved!r}"
-    return None
 
 
 # Module-level singleton (matches executor / lease_reaper pattern)
