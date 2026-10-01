@@ -33,6 +33,7 @@ from aegra_api.core.route_merger import (
     merge_exception_handlers,
     merge_lifespans,
 )
+from aegra_api.core.tenancy.checkpointer import ensure_checkpoint_backend_available
 from aegra_api.core.tenancy.crypto import get_key_provider
 from aegra_api.middleware import ContentTypeFixMiddleware, StructLogMiddleware
 from aegra_api.models.errors import AgentProtocolError, get_error_type
@@ -85,6 +86,9 @@ def _log_connection_help(error: Exception) -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """FastAPI lifespan context manager for startup/shutdown"""
+    # A backend that cannot route checkpoints must fail before any pool opens.
+    ensure_checkpoint_backend_available()
+
     # Resolve the durability default up front: an invalid value fails the boot, not every run.
     get_default_durability()
 
