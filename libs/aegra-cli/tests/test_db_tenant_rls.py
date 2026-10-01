@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import psycopg
 import pytest
-from aegra_api.core.tenant_rls import UntaggedRowsError
+from aegra_api.core.tenancy.rls import UntaggedRowsError
 from aegra_api.settings import settings
 from click.testing import CliRunner
 
@@ -58,7 +58,7 @@ def test_grants_tenant_role_to_connecting_role_by_default(cli_runner: CliRunner)
         patch(
             "psycopg.AsyncConnection.connect", new_callable=AsyncMock, return_value=conn
         ) as connect,
-        patch("aegra_api.core.tenant_rls.enable_tenant_rls", side_effect=fake_apply),
+        patch("aegra_api.core.tenancy.rls.enable_tenant_rls", side_effect=fake_apply),
     ):
         result = cli_runner.invoke(cli, ["db", "enable-tenant-rls"])
 
@@ -78,7 +78,7 @@ def test_app_role_option_overrides_connecting_role(cli_runner: CliRunner) -> Non
 
     with (
         patch("psycopg.AsyncConnection.connect", new_callable=AsyncMock, return_value=conn),
-        patch("aegra_api.core.tenant_rls.enable_tenant_rls", apply),
+        patch("aegra_api.core.tenancy.rls.enable_tenant_rls", apply),
     ):
         result = cli_runner.invoke(cli, ["db", "enable-tenant-rls", "--app-role", "aegra_app"])
 
@@ -99,7 +99,7 @@ def test_missing_tables_explain_to_start_the_server_first(cli_runner: CliRunner)
         patch(
             "psycopg.AsyncConnection.connect", new_callable=AsyncMock, return_value=_connection()
         ),
-        patch("aegra_api.core.tenant_rls.enable_tenant_rls", AsyncMock(side_effect=error)),
+        patch("aegra_api.core.tenancy.rls.enable_tenant_rls", AsyncMock(side_effect=error)),
     ):
         result = cli_runner.invoke(cli, ["db", "enable-tenant-rls"])
 
@@ -115,7 +115,7 @@ def test_schema_option_is_passed_through(cli_runner: CliRunner) -> None:
         patch(
             "psycopg.AsyncConnection.connect", new_callable=AsyncMock, return_value=_connection()
         ),
-        patch("aegra_api.core.tenant_rls.enable_tenant_rls", apply),
+        patch("aegra_api.core.tenancy.rls.enable_tenant_rls", apply),
     ):
         result = cli_runner.invoke(cli, ["db", "enable-tenant-rls", "--schema", "aegra"])
 
@@ -132,7 +132,7 @@ def test_assign_existing_to_is_passed_through(cli_runner: CliRunner) -> None:
         patch(
             "psycopg.AsyncConnection.connect", new_callable=AsyncMock, return_value=_connection()
         ),
-        patch("aegra_api.core.tenant_rls.enable_tenant_rls", apply),
+        patch("aegra_api.core.tenancy.rls.enable_tenant_rls", apply),
     ):
         result = cli_runner.invoke(
             cli, ["db", "enable-tenant-rls", "--assign-existing-to", "legacy"]
@@ -150,7 +150,7 @@ def test_untagged_rows_stop_with_counts_and_the_option_to_use(cli_runner: CliRun
         patch(
             "psycopg.AsyncConnection.connect", new_callable=AsyncMock, return_value=_connection()
         ),
-        patch("aegra_api.core.tenant_rls.enable_tenant_rls", AsyncMock(side_effect=error)),
+        patch("aegra_api.core.tenancy.rls.enable_tenant_rls", AsyncMock(side_effect=error)),
     ):
         result = cli_runner.invoke(cli, ["db", "enable-tenant-rls"])
 
@@ -169,7 +169,7 @@ def test_malformed_assign_tenant_is_reported(cli_runner: CliRunner) -> None:
         patch(
             "psycopg.AsyncConnection.connect", new_callable=AsyncMock, return_value=_connection()
         ),
-        patch("aegra_api.core.tenant_rls.enable_tenant_rls", AsyncMock(side_effect=error)),
+        patch("aegra_api.core.tenancy.rls.enable_tenant_rls", AsyncMock(side_effect=error)),
     ):
         result = cli_runner.invoke(cli, ["db", "enable-tenant-rls", "--assign-existing-to", "a.b"])
 

@@ -13,9 +13,9 @@ import structlog
 
 from aegra_api.core.active_runs import active_run_tenants, active_runs
 from aegra_api.core.auth_ctx import with_auth_ctx
-from aegra_api.core.db_scope import system_scope, tenant_scope
 from aegra_api.core.redis_manager import redis_manager
-from aegra_api.core.tenant import TenantRejectedError, resolve_tenant_id
+from aegra_api.core.tenancy.resolver import TenantRejectedError, resolve_tenant_id
+from aegra_api.core.tenancy.scope import system_scope, tenant_scope
 from aegra_api.models.run_job import RunJob
 from aegra_api.services.broker import broker_manager
 from aegra_api.services.event_streaming.native_stream import stream_native_v3_events

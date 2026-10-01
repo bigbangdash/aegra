@@ -4,9 +4,8 @@ from collections.abc import Iterator
 import pytest
 from pydantic import SecretStr
 
-from aegra_api.core import tenant_crypto
-from aegra_api.core.db_scope import DbScopeMissingError, system_scope, tenant_scope
-from aegra_api.core.tenant_crypto import (
+from aegra_api.core.tenancy import crypto
+from aegra_api.core.tenancy.crypto import (
     StaticKeyProvider,
     TenantPayloadError,
     encryption_tenant,
@@ -14,6 +13,7 @@ from aegra_api.core.tenant_crypto import (
     open_sealed,
     seal,
 )
+from aegra_api.core.tenancy.scope import DbScopeMissingError, system_scope, tenant_scope
 from aegra_api.settings import settings
 
 MASTER = bytes(range(32))
@@ -31,9 +31,9 @@ def rls_on(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def reset_provider() -> Iterator[None]:
-    tenant_crypto.configure_key_provider(None)
+    crypto.configure_key_provider(None)
     yield
-    tenant_crypto.configure_key_provider(None)
+    crypto.configure_key_provider(None)
 
 
 @pytest.mark.asyncio
@@ -129,7 +129,7 @@ def test_master_key_from_settings_builds_static_provider(monkeypatch: pytest.Mon
 
 def test_configured_provider_takes_precedence(provider: StaticKeyProvider, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_REDIS_MASTER_KEY", None)
-    tenant_crypto.configure_key_provider(provider)
+    crypto.configure_key_provider(provider)
 
     assert get_key_provider() is provider
 

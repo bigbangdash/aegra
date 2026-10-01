@@ -7,8 +7,8 @@ import psycopg
 import pytest
 from psycopg_pool import AsyncConnectionPool
 
-from aegra_api.core.db_scope import DbScopeMissingError, system_scope, tenant_scope
-from aegra_api.core.tenant_pool import SYSTEM_SETTING, TENANT_SETTING, TenantScopedConnectionPool
+from aegra_api.core.tenancy.pool import SYSTEM_SETTING, TENANT_SETTING, TenantScopedConnectionPool
+from aegra_api.core.tenancy.scope import DbScopeMissingError, system_scope, tenant_scope
 
 
 def _make_conn() -> MagicMock:

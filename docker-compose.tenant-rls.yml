@@ -2,7 +2,7 @@
 # Usage (flag off for a baseline, on for the RLS run; same stack either way):
 #   AEGRA_TENANT_RLS_ENABLED=true docker compose -f docker-compose.yml \
 #     -f docker-compose.dev.yml -f docker-compose.tenant-rls.yml up -d
-# Then run the operator enable step (aegra_api.core.tenant_rls) once.
+# Then run the operator enable step (aegra_api.core.tenancy.rls) once.
 
 services:
   aegra:

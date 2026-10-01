@@ -23,10 +23,10 @@ from redis import TimeoutError as RedisTimeoutError
 from sqlalchemy import select, update
 
 from aegra_api.core.active_runs import active_runs, explicit_run_cancellations
-from aegra_api.core.db_scope import system_scope
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import _get_session_maker
 from aegra_api.core.redis_manager import redis_manager
+from aegra_api.core.tenancy.scope import system_scope
 from aegra_api.models.run_job import RunJob
 from aegra_api.observability.span_enrichment import merge_run_metadata, set_trace_context
 from aegra_api.services.base_executor import BaseExecutor

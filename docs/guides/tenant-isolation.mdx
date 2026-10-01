@@ -25,7 +25,7 @@ The tenant is the authenticated user's `org_id`, set by your [auth handler](/gui
 To check tenants against a registry (known and active tenants), or to derive the tenant from something other than `org_id`, install a resolver at import time, for example from the module your auth handler lives in:
 
 ```python
-from aegra_api.core.tenant import TenantRejectedError, configure_tenant_resolver, org_id_tenant_resolver
+from aegra_api.core.tenancy.resolver import TenantRejectedError, configure_tenant_resolver, org_id_tenant_resolver
 from aegra_api.models.auth import User
 
 
@@ -84,5 +84,5 @@ The tables use `FORCE ROW LEVEL SECURITY`, so even the server's login role, whic
 - **Semantic search added later.** The `store_vectors` table only exists once semantic search is configured. Re-run `aegra db enable-tenant-rls` after enabling it. Until you do, store writes that embed fail with a permission error and write nothing, so no vector is ever stored outside RLS.
 - **Do not turn the flag off after enabling RLS.** The policies make `tenant_id` required, and a server with the flag off cannot fill it, so writes fail.
 - **Switching the flag with the Redis broker on.** Redis keeps each run's replay buffer for 10 minutes. Events written before the switch fail to decrypt after it (unsealed with the flag on, sealed with it off), and streams reading them stop with an error. Wait until no runs are active, then 10 more minutes, before switching.
-- **Custom key storage.** To keep tenant keys in a KMS instead of deriving them from one master key, call `aegra_api.core.tenant_crypto.configure_key_provider()` at import time, for example from the module your `http.app` points to. The startup check runs before your app's lifespan, so configuring the provider there is too late.
+- **Custom key storage.** To keep tenant keys in a KMS instead of deriving them from one master key, call `aegra_api.core.tenancy.crypto.configure_key_provider()` at import time, for example from the module your `http.app` points to. The startup check runs before your app's lifespan, so configuring the provider there is too late.
 - **Background jobs.** The cron scheduler fires each cron as its owning tenant. A cron whose stored `tenant_id` no longer passes validation is skipped and logged instead of stopping the rest of the batch.

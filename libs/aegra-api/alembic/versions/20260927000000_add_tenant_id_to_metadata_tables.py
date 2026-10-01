@@ -3,7 +3,7 @@
 Groundwork for AEGRA_TENANT_RLS_ENABLED. The column stays nullable so existing
 installs keep working with the flag off; NOT NULL, the RLS policies and the
 tenant role are applied by the separate operator-run enable step
-(aegra_api.core.tenant_rls), never by migrations.
+(aegra_api.core.tenancy.rls), never by migrations.
 
 Indexes are built CONCURRENTLY for the same reason as d9e0f1a23456: a
 transactional build holds a SHARE lock that stalls writes on large tables.

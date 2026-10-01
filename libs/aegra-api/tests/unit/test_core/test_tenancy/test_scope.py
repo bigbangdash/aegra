@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from aegra_api.core.db_scope import (
+from aegra_api.core.tenancy.scope import (
     DbScope,
     DbScopeMissingError,
     bind_scope,

@@ -11,7 +11,7 @@ from aegra_api.config import load_store_config
 from aegra_api.core.auth_deps import auth_dependency, get_current_user
 from aegra_api.core.auth_handlers import build_auth_context, handle_event
 from aegra_api.core.database import db_manager
-from aegra_api.core.tenant import tenant_scope_dependency
+from aegra_api.core.tenancy.resolver import tenant_scope_dependency
 from aegra_api.models import (
     StoreDeleteRequest,
     StoreGetResponse,

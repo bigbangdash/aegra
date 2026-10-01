@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from aegra_api.core.db_scope import DbScope, current_db_scope
+from aegra_api.core.tenancy.scope import DbScope, current_db_scope
 from aegra_api.settings import settings
 
 SEALED_PREFIX = "v1"

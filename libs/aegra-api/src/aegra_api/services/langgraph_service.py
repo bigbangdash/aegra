@@ -24,7 +24,7 @@ from langgraph.pregel import Pregel
 from langgraph_sdk.auth.types import BaseUser
 
 from aegra_api.constants import ASSISTANT_NAMESPACE_UUID
-from aegra_api.core.db_scope import system_scope
+from aegra_api.core.tenancy.scope import system_scope
 from aegra_api.models.auth import User
 from aegra_api.observability.base import (
     get_tracing_callbacks,

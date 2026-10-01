@@ -19,10 +19,10 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg import conninfo, sql
 from psycopg.rows import dict_row
 
-from aegra_api.core.db_scope import DbScopeMissingError, system_scope, tenant_scope
-from aegra_api.core.tenant_pool import TenantScopedConnectionPool
-from aegra_api.core.tenant_rls import LANGGRAPH_TENANT_TABLES, enable_tenant_rls
-from aegra_api.core.tenant_store import TENANT_NAMESPACE_ROOT, TenantScopedPostgresStore
+from aegra_api.core.tenancy.pool import TenantScopedConnectionPool
+from aegra_api.core.tenancy.rls import LANGGRAPH_TENANT_TABLES, enable_tenant_rls
+from aegra_api.core.tenancy.scope import DbScopeMissingError, system_scope, tenant_scope
+from aegra_api.core.tenancy.store import TENANT_NAMESPACE_ROOT, TenantScopedPostgresStore
 from aegra_api.settings import settings
 
 pytestmark = pytest.mark.e2e

@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from aegra_api.core.active_runs import active_run_tenants, active_runs
-from aegra_api.core.db_scope import DbScope, DbScopeMissingError, current_db_scope, system_scope
-from aegra_api.core.tenant import configure_tenant_resolver
+from aegra_api.core.tenancy.resolver import configure_tenant_resolver
+from aegra_api.core.tenancy.scope import DbScope, DbScopeMissingError, current_db_scope, system_scope
 from aegra_api.models.auth import User
 from aegra_api.models.run_job import RunExecution, RunIdentity, RunJob
 from aegra_api.services import run_executor as run_executor_module

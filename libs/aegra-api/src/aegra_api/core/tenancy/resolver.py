@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from fastapi import Depends, HTTPException
 
 from aegra_api.core.auth_deps import get_current_user
-from aegra_api.core.db_scope import TENANT_ID_PATTERN, current_db_scope, is_valid_tenant_id, tenant_scope
+from aegra_api.core.tenancy.scope import TENANT_ID_PATTERN, current_db_scope, is_valid_tenant_id, tenant_scope
 from aegra_api.models.auth import User
 from aegra_api.settings import settings
 

@@ -32,10 +32,10 @@ from psycopg import conninfo, sql
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from aegra_api.core.db_scope import system_scope, tenant_scope
-from aegra_api.core.tenant_pool import TenantScopedConnectionPool
-from aegra_api.core.tenant_rls import enable_tenant_rls
-from aegra_api.core.tenant_store import TenantScopedPostgresStore
+from aegra_api.core.tenancy.pool import TenantScopedConnectionPool
+from aegra_api.core.tenancy.rls import enable_tenant_rls
+from aegra_api.core.tenancy.scope import system_scope, tenant_scope
+from aegra_api.core.tenancy.store import TenantScopedPostgresStore
 from aegra_api.settings import settings
 
 TENANT_ROLE = "aegra_tenant"

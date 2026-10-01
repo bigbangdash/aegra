@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from psycopg import sql
 
-from aegra_api.core.tenant_rls import (
+from aegra_api.core.tenancy.rls import (
     CHILD_TENANT_TABLES,
     GRANT_ONLY_TABLES,
     SHARED_TENANT_TABLES,

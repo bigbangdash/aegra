@@ -468,7 +468,7 @@ class TenantSettings(EnvBase):
     """PostgreSQL row-level security for tenant isolation.
 
     Off by default. When on, every LangGraph pool checkout must run inside an
-    explicit tenant or system DB scope (see core.db_scope), and tenant-scoped
+    explicit tenant or system DB scope (see core.tenancy.scope), and tenant-scoped
     checkouts switch to AEGRA_TENANT_DB_ROLE so RLS policies apply.
     """
 

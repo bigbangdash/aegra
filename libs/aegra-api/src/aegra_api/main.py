@@ -33,7 +33,7 @@ from aegra_api.core.route_merger import (
     merge_exception_handlers,
     merge_lifespans,
 )
-from aegra_api.core.tenant_crypto import get_key_provider
+from aegra_api.core.tenancy.crypto import get_key_provider
 from aegra_api.middleware import ContentTypeFixMiddleware, StructLogMiddleware
 from aegra_api.models.errors import AgentProtocolError, get_error_type
 from aegra_api.observability.metrics import setup_prometheus_metrics

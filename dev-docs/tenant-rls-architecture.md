@@ -50,7 +50,7 @@ Design consequence: every guard **fails closed** and every bypass is named.
 ## 3. Scope: who declares it
 
 ```
-core/db_scope.py
+core/tenancy/scope.py
   tenant_scope(tenant_id)   validates ^[A-Za-z0-9_-]{1,64}$ else ValueError
   system_scope(reason)      reason mandatory → greppable audit trail
   bind_scope(scope)         re-enter a captured scope (thread → loop hop)
@@ -61,7 +61,7 @@ Entry points (the ONLY places a tenant is chosen):
 
 | Where | Tenant comes from |
 |-------|-------------------|
-| `core/tenant.py::tenant_db_scope` — router dependency on threads, runs, stateless runs, assistants, crons, store, event streaming | `resolve_tenant_id(user)`: the configured resolver (default `user.org_id`). Rejected or malformed → 403 |
+| `core/tenancy/resolver.py::tenant_db_scope` — router dependency on threads, runs, stateless runs, assistants, crons, store, event streaming | `resolve_tenant_id(user)`: the configured resolver (default `user.org_id`). Rejected or malformed → 403 |
 | `services/run_executor.py::execute_run` | `resolve_tenant_id(job.user)`. Overrides the worker loop's system scope. Rejected → the run is finalized as `error` under system scope (no stream signals: they need the tenant key) |
 | `services/cron_scheduler.py::_tick` per cron | `cron.tenant_id` stored at create time; `_fire_cron` asks the resolver to confirm it (same tenant, still accepted). Rejected or remapped → this occurrence is skipped (next_run advances, cron stays enabled). Malformed legacy value → skipped and logged, batch continues |
 
@@ -104,7 +104,7 @@ Two pools, two mechanisms, same effect:
 
 ```
 SQLAlchemy (asyncpg)                        LangGraph pool (psycopg, autocommit)
-core/tenant_session.py                      core/tenant_pool.py
+core/tenancy/session.py                      core/tenancy/pool.py
   after_begin on every transaction:           connection():
     one statement:                              scope resolved BEFORE checkout
       set_config('role', aegra_tenant, true)    tenant → wrap the whole checkout in
@@ -149,7 +149,7 @@ core/tenant_session.py                      core/tenant_pool.py
 ## 5. Schema and policies
 
 Alembic adds nullable `tenant_id` columns and indexes only. Roles, NOT NULL,
-defaults and policies live in `core/tenant_rls.py::enable_tenant_rls`, run by the
+defaults and policies live in `core/tenancy/rls.py::enable_tenant_rls`, run by the
 operator (`aegra db enable-tenant-rls`), because LangGraph creates its tables in
 `setup()` after alembic runs, and because flag-off installs must stay unaffected.
 
@@ -183,7 +183,7 @@ Keys that span tenants:
 
 `store`'s primary key is `(prefix, key)` across tenants. Two tenants writing
 the same namespace/key would collide on a row RLS hides — the write fails and
-reveals that the key exists. `core/tenant_store.py` stores tenant ops under
+reveals that the key exists. `core/tenancy/store.py` stores tenant ops under
 `("aegra_tenant", tenant_id, *namespace)` and strips it on read. Graphs and the
 HTTP API use the same store instance, so both see only their own namespace.
 
@@ -287,9 +287,9 @@ the server refuses to start.
 
 | Level | Files |
 |-------|-------|
-| Unit — scope and resolver | `tests/unit/test_core/test_db_scope.py`, `test_tenant.py`, `test_background_db_scopes.py` |
-| Unit — DB plumbing | `test_tenant_session.py`, `test_tenant_pool.py`, `test_tenant_rls.py`, `test_database_manager.py`, `test_tenant_store.py` |
-| Unit — Redis | `test_tenant_crypto.py`, `tests/unit/test_services/test_redis_broker_tenant_encryption.py`, `test_run_executor.py` (tenant registry) |
+| Unit — scope and resolver | `tests/unit/test_core/test_tenancy/test_scope.py`, `test_tenancy/test_resolver.py`, `test_tenancy/test_background_scopes.py` |
+| Unit — DB plumbing | `test_tenancy/test_session.py`, `test_tenancy/test_pool.py`, `test_tenancy/test_rls.py`, `test_database_manager.py`, `test_tenancy/test_store.py` |
+| Unit — Redis | `test_tenancy/test_crypto.py`, `tests/unit/test_services/test_redis_broker_tenant_encryption.py`, `test_run_executor.py` (tenant registry) |
 | Unit — cron | `tests/unit/test_services/test_cron_scheduler.py` (malformed tenant skip) |
 | Unit — CLI | `libs/aegra-cli/tests/test_db_tenant_rls.py` |
 | Integration | `tests/integration/test_api/test_threads_tenant_scope.py` |

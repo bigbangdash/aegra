@@ -22,10 +22,10 @@ from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aegra_api.core.db_scope import is_valid_tenant_id, system_scope, tenant_scope
 from aegra_api.core.orm import Cron as CronORM
 from aegra_api.core.orm import _get_session_maker
-from aegra_api.core.tenant import TenantRejectedError, resolve_tenant_id
+from aegra_api.core.tenancy.resolver import TenantRejectedError, resolve_tenant_id
+from aegra_api.core.tenancy.scope import is_valid_tenant_id, system_scope, tenant_scope
 from aegra_api.models import RunCreate, User
 from aegra_api.services.cron_service import (
     CronService,

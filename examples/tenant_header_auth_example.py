@@ -15,7 +15,7 @@ rejected, to exercise configure_tenant_resolver end to end.
 
 from langgraph_sdk import Auth
 
-from aegra_api.core.tenant import TenantRejectedError, configure_tenant_resolver, org_id_tenant_resolver
+from aegra_api.core.tenancy.resolver import TenantRejectedError, configure_tenant_resolver, org_id_tenant_resolver
 from aegra_api.models.auth import User
 
 auth = Auth()

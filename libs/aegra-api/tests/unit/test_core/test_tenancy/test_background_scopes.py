@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from aegra_api.core.db_scope import DbScope, DbScopeMissingError, current_db_scope
 from aegra_api.core.health import _probe_db_scope
+from aegra_api.core.tenancy.scope import DbScope, DbScopeMissingError, current_db_scope
 from aegra_api.services.lease_reaper import LeaseReaper
 from aegra_api.services.thread_ttl import ThreadTTLSweeper
 from aegra_api.services.worker_executor import WorkerExecutor

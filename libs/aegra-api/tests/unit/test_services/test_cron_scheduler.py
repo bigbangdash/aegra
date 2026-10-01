@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi import HTTPException
 
-from aegra_api.core.db_scope import DbScope, DbScopeMissingError, current_db_scope, system_scope, tenant_scope
-from aegra_api.core.tenant import TenantRejectedError, TenantResolver, configure_tenant_resolver
+from aegra_api.core.tenancy.resolver import TenantRejectedError, TenantResolver, configure_tenant_resolver
+from aegra_api.core.tenancy.scope import DbScope, DbScopeMissingError, current_db_scope, system_scope, tenant_scope
 from aegra_api.models.auth import User
 from aegra_api.services.cron_scheduler import CronScheduler
 from aegra_api.settings import settings

@@ -20,7 +20,7 @@ from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import _get_session_maker, get_session
 from aegra_api.core.sse import create_end_event, get_sse_headers, make_sse_response, sse_to_bytes
-from aegra_api.core.tenant import tenant_scope_dependency
+from aegra_api.core.tenancy.resolver import tenant_scope_dependency
 from aegra_api.models import Run, RunCreate, RunsCancel, RunStatus, User
 from aegra_api.models.enums import RunCancellationAction
 from aegra_api.models.errors import CONFLICT, NOT_FOUND, SSE_RESPONSE

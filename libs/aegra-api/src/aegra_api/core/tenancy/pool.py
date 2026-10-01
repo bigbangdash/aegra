@@ -21,7 +21,7 @@ import structlog
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
-from aegra_api.core.db_scope import current_db_scope
+from aegra_api.core.tenancy.scope import current_db_scope
 
 logger = structlog.get_logger(__name__)
 

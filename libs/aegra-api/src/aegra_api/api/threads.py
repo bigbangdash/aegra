@@ -23,7 +23,7 @@ from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import ThreadTTL as ThreadTTLORM
 from aegra_api.core.orm import get_session
-from aegra_api.core.tenant import scoped_tenant_id, tenant_scope_dependency
+from aegra_api.core.tenancy.resolver import scoped_tenant_id, tenant_scope_dependency
 from aegra_api.models import (
     Thread,
     ThreadCheckpoint,

@@ -26,7 +26,7 @@ from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import _get_session_maker
 from aegra_api.core.sse import format_sse_message, get_sse_headers, make_sse_response, sse_to_bytes
-from aegra_api.core.tenant import tenant_scope_dependency
+from aegra_api.core.tenancy.resolver import tenant_scope_dependency
 from aegra_api.models import User
 from aegra_api.models.event_streaming import EventStreamRequest, ThreadCommand
 from aegra_api.services.event_streaming.capabilities import get_v2_capabilities

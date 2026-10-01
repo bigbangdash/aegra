@@ -29,7 +29,7 @@ from langgraph.store.base import (
 )
 from langgraph.store.postgres.aio import AsyncPostgresStore
 
-from aegra_api.core.db_scope import DbScope, bind_scope, current_db_scope
+from aegra_api.core.tenancy.scope import DbScope, bind_scope, current_db_scope
 
 TENANT_NAMESPACE_ROOT = "aegra_tenant"
 

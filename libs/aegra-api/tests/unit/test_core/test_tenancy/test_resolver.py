@@ -3,14 +3,14 @@ from collections.abc import Iterator
 import pytest
 from fastapi import HTTPException
 
-from aegra_api.core.db_scope import DbScopeMissingError, current_db_scope, system_scope, tenant_scope
-from aegra_api.core.tenant import (
+from aegra_api.core.tenancy.resolver import (
     TenantRejectedError,
     configure_tenant_resolver,
     resolve_tenant_id,
     scoped_tenant_id,
     tenant_db_scope,
 )
+from aegra_api.core.tenancy.scope import DbScopeMissingError, current_db_scope, system_scope, tenant_scope
 from aegra_api.models.auth import User
 from aegra_api.settings import settings
 

@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from aegra_api import __version__
 from aegra_api.core.database import db_manager
-from aegra_api.core.db_scope import system_scope
+from aegra_api.core.tenancy.scope import system_scope
 from aegra_api.models.errors import UNAVAILABLE
 from aegra_api.settings import settings
 

@@ -4,9 +4,9 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
-from aegra_api.core.db_scope import DbScopeMissingError, system_scope, tenant_scope
-from aegra_api.core.tenant_pool import SYSTEM_SETTING, TENANT_SETTING
-from aegra_api.core.tenant_session import TenantScopedSession, _apply_db_scope, session_class_for_settings
+from aegra_api.core.tenancy.pool import SYSTEM_SETTING, TENANT_SETTING
+from aegra_api.core.tenancy.scope import DbScopeMissingError, system_scope, tenant_scope
+from aegra_api.core.tenancy.session import TenantScopedSession, _apply_db_scope, session_class_for_settings
 from aegra_api.settings import settings
 
 

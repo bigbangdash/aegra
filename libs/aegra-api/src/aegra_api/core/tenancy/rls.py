@@ -9,7 +9,7 @@ Every isolated table uses FORCE ROW LEVEL SECURITY, so the table owner (the
 server's login role) is bound by the policies too: a connection that declared
 no scope sees no rows, whichever code path opened it. The system scope gets
 rows through one extra policy, scoped to the login role and keyed on the
-aegra.system setting that only system_scope raises (core.tenant_pool). No
+aegra.system setting that only system_scope raises (core.tenancy.pool). No
 BYPASSRLS role is needed, and the login role keeps owning the tables, so
 LangGraph setup() and alembic still run their DDL.
 
@@ -22,9 +22,9 @@ from collections.abc import Mapping, Sequence
 
 from psycopg import AsyncConnection, sql
 
-from aegra_api.core.db_scope import is_valid_tenant_id
-from aegra_api.core.tenant_pool import SYSTEM_SETTING, TENANT_SETTING
-from aegra_api.core.tenant_store import TENANT_NAMESPACE_ROOT
+from aegra_api.core.tenancy.pool import SYSTEM_SETTING, TENANT_SETTING
+from aegra_api.core.tenancy.scope import is_valid_tenant_id
+from aegra_api.core.tenancy.store import TENANT_NAMESPACE_ROOT
 
 METADATA_TENANT_TABLES: tuple[str, ...] = ("thread", "runs", "crons")
 LANGGRAPH_TENANT_TABLES: tuple[str, ...] = (
@@ -214,7 +214,7 @@ async def _assign_existing_rows(
 async def _move_store_rows_under_tenant(
     conn: AsyncConnection, schema: str, tenant_id: str, *, with_vectors: bool
 ) -> None:
-    # Tenant store rows live under the hidden namespace head (core.tenant_store). The key is
+    # Tenant store rows live under the hidden namespace head (core.tenancy.store). The key is
     # (prefix, key) and store_vectors references it without ON UPDATE, so copy, repoint, delete.
     head = sql.Literal(f"{TENANT_NAMESPACE_ROOT}.{tenant_id}.")
     store = _table_ident("store", schema)

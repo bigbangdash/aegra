@@ -14,10 +14,10 @@ import structlog
 from redis import RedisError
 from sqlalchemy import select, update
 
-from aegra_api.core.db_scope import system_scope
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import _get_session_maker
 from aegra_api.core.redis_manager import redis_manager
+from aegra_api.core.tenancy.scope import system_scope
 from aegra_api.observability.metrics import REAPER_RECOVERED_RUNS
 from aegra_api.services.run_status import set_thread_status_if_no_active_runs
 from aegra_api.settings import settings
