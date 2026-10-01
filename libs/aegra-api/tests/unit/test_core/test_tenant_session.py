@@ -5,7 +5,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
 from aegra_api.core.db_scope import DbScopeMissingError, system_scope, tenant_scope
-from aegra_api.core.tenant_pool import TENANT_SETTING
+from aegra_api.core.tenant_pool import SYSTEM_SETTING, TENANT_SETTING
 from aegra_api.core.tenant_session import TenantScopedSession, _apply_db_scope, session_class_for_settings
 from aegra_api.settings import settings
 
@@ -33,29 +33,41 @@ def test_tenant_scope_switches_role_and_sets_tenant(monkeypatch: pytest.MonkeyPa
     with tenant_scope("org-a"):
         _apply_db_scope(MagicMock(), MagicMock(), conn)
 
-    conn.exec_driver_sql.assert_called_once_with("SET LOCAL ROLE aegra_tenant")
-    _, params = conn.execute.call_args.args
-    assert params == {"name": TENANT_SETTING, "value": "org-a"}
+    conn.exec_driver_sql.assert_not_called()
+    (apply_call,) = conn.execute.call_args_list
+    statement, params = apply_call.args
+    assert str(statement).startswith("SELECT set_config('role', :role, true)")
+    assert params == {
+        "role": "aegra_tenant",
+        "tenant_name": TENANT_SETTING,
+        "tenant": "org-a",
+        "system_name": SYSTEM_SETTING,
+    }
 
 
-def test_role_name_is_quoted(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_DB_ROLE", 'bad"; DROP TABLE thread; --')
+def test_role_name_is_sent_as_a_bound_value_not_sql(monkeypatch: pytest.MonkeyPatch) -> None:
+    hostile = 'bad"; DROP TABLE thread; --'
+    monkeypatch.setattr(settings.tenant, "AEGRA_TENANT_DB_ROLE", hostile)
     conn = _connection()
 
     with tenant_scope("org-a"):
         _apply_db_scope(MagicMock(), MagicMock(), conn)
 
-    conn.exec_driver_sql.assert_called_once_with('SET LOCAL ROLE "bad""; DROP TABLE thread; --"')
+    statement, params = conn.execute.call_args.args
+    assert hostile not in str(statement)
+    assert params["role"] == hostile
 
 
-def test_system_scope_leaves_transaction_untouched() -> None:
+def test_system_scope_keeps_the_login_role_and_raises_the_system_flag() -> None:
     conn = _connection()
 
     with system_scope("unit test"):
         _apply_db_scope(MagicMock(), MagicMock(), conn)
 
     conn.exec_driver_sql.assert_not_called()
-    conn.execute.assert_not_called()
+    statement, params = conn.execute.call_args.args
+    assert "set_config(:name, :value, true)" in str(statement)
+    assert params == {"name": SYSTEM_SETTING, "value": "on"}
 
 
 def test_missing_scope_fails_closed() -> None:

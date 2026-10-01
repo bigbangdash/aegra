@@ -82,6 +82,9 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
 
     with context.begin_transaction():
+        # Under tenant RLS (FORCE) the owner sees no rows without this, so a data migration would
+        # silently touch nothing. Session-level: survives autocommit_block() commits.
+        connection.exec_driver_sql("SELECT set_config('aegra.system', 'on', false)")
         context.run_migrations()
 
 

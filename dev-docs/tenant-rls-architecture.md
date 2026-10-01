@@ -13,8 +13,9 @@ system with a written reason. The scope is resolved at the edge (HTTP dependency
 `execute_run`, each cron fire) and every connection checkout reads it. A tenant
 scope switches the connection to the `aegra_tenant` role and sets the GUC
 `aegra.tenant_id`; PostgreSQL RLS policies compare rows against that GUC. A
-system scope keeps the login role, which owns the tables and so bypasses RLS.
-**No scope is an error, never a bypass.** Redis, which RLS cannot reach, gets the
+system scope keeps the login role and raises the GUC `aegra.system`; the tables
+use FORCE RLS, so the owner sees rows only through a policy keyed on that GUC.
+**No scope is an error, never a bypass** — in the app, and in the database too. Redis, which RLS cannot reach, gets the
 same boundary by encrypting event payloads with a per-tenant key. With the flag
 off none of this runs: no scope is required and every format is unchanged.
 
@@ -30,6 +31,17 @@ another tenant's data.
 Out of scope: a compromised server process. It holds the DB login (table
 owner) and the Redis master key. Also out of scope: isolating tenants from the
 operator.
+
+Graph code is part of that process: it is imported in-process and can read
+`os.environ`, so it sees the DB login and the Redis key (upstream #312 proposes
+running graphs out of process; if that lands, a graph could get tenant-only
+credentials). Tenant RLS therefore trusts graph code as much as Aegra's own.
+
+Tenant is not owner. RLS answers "which company"; the existing `user_id ==
+user.identity` predicate still answers "whose, within that company" and is
+ANDed inside the tenant. A future `owner` field (upstream #489) would feed that
+inner predicate only. Keep them apart: never derive the tenant from the owner or
+the reverse, so a within-tenant sharing change can never widen the tenant boundary.
 
 Design consequence: every guard **fails closed** and every bypass is named.
 
@@ -49,9 +61,16 @@ Entry points (the ONLY places a tenant is chosen):
 
 | Where | Tenant comes from |
 |-------|-------------------|
-| `core/tenant.py::tenant_db_scope` — router dependency on threads, runs, stateless runs, assistants, crons, store, event streaming | `user.org_id` from the auth handler. Missing or malformed → 403 |
-| `services/run_executor.py::execute_run` | `job.user.org_id` (same resolver). Overrides the worker loop's system scope |
-| `services/cron_scheduler.py::_tick` per cron | `cron.tenant_id` stored at create time. Malformed legacy value → that cron is skipped and logged, batch continues |
+| `core/tenant.py::tenant_db_scope` — router dependency on threads, runs, stateless runs, assistants, crons, store, event streaming | `resolve_tenant_id(user)`: the configured resolver (default `user.org_id`). Rejected or malformed → 403 |
+| `services/run_executor.py::execute_run` | `resolve_tenant_id(job.user)`. Overrides the worker loop's system scope. Rejected → the run is finalized as `error` under system scope (no stream signals: they need the tenant key) |
+| `services/cron_scheduler.py::_tick` per cron | `cron.tenant_id` stored at create time; `_fire_cron` asks the resolver to confirm it (same tenant, still accepted). Rejected or remapped → this occurrence is skipped (next_run advances, cron stays enabled). Malformed legacy value → skipped and logged, batch continues |
+
+Below the edges, code that writes a `tenant_id` column reads `scoped_tenant_id()`
+(the current scope), never the user, so one request resolves once and a custom
+resolver cannot disagree with the column it scopes.
+
+`configure_tenant_resolver(async fn)` is the registry hook, set at import time
+like `configure_key_provider()`. The resolver's result is validated centrally.
 
 System scopes (`grep 'system_scope("'`):
 
@@ -87,24 +106,40 @@ Two pools, two mechanisms, same effect:
 SQLAlchemy (asyncpg)                        LangGraph pool (psycopg, autocommit)
 core/tenant_session.py                      core/tenant_pool.py
   after_begin on every transaction:           connection():
-    SET LOCAL ROLE aegra_tenant                 scope resolved BEFORE checkout
-    set_config('aegra.tenant_id', t, true)      tenant → wrap the whole checkout in
-                                                  one transaction, SET LOCAL ROLE,
-                                                  set_config(..., true)
+    one statement:                              scope resolved BEFORE checkout
+      set_config('role', aegra_tenant, true)    tenant → wrap the whole checkout in
+      set_config('aegra.tenant_id', t, true)      one transaction + the same one
+      set_config('aegra.system', '', true)        statement
 ```
+
+- One statement, not `SET LOCAL ROLE` + two `set_config`: `set_config('role', …, true)`
+  is `SET LOCAL ROLE` (as in PostgREST) and saves two round trips per checkout
+  (`scripts/bench_tenant_rls_checkpoint.py`: p50 −0.3 to −0.8 ms). The role is a bound value.
 
 - `SET LOCAL` dies at COMMIT and AsyncSession autobegins after every commit,
   hence `after_begin` instead of once per request.
 - The LangGraph pool is autocommit, so there is no transaction to hang
   `SET LOCAL` on; the checkout opens one explicitly. Commit/rollback clears role
   and GUC before the connection returns to the pool — no leakage between checkouts.
-- System scope: no role switch, no GUC. The login role owns the tables, and
-  RLS without `FORCE` does not apply to the owner. **Requirement: the server's
-  login role must own the tables (or have BYPASSRLS).** If it does not, every
-  system-scope job (reaper, TTL sweeper, cron claim) silently sees zero rows.
-  The regular E2E stack logs in as a superuser (postgres image default). The
-  non-superuser-owner path was verified manually (2026-09-30): full E2E plus
-  cron firing, lease reaper recovery and TTL sweeping, all passing.
+- System scope: no role switch; `aegra.system = 'on'`. Every isolated table has
+  `FORCE ROW LEVEL SECURITY` plus the policy `aegra_system_access`
+  `TO <login role> USING (current_setting('aegra.system', true) = 'on')`.
+  - SQLAlchemy: `SET LOCAL`-style `set_config(..., true)` in `after_begin`.
+  - LangGraph pool: session-level `set_config(..., false)` for the checkout,
+    cleared on return. Not a transaction, because `setup()` runs
+    `CREATE INDEX CONCURRENTLY` through system checkouts.
+  - A leftover flag is harmless: the policy is `TO` the login role and tenant
+    checkouts run as `aegra_tenant`. Tenant checkouts also clear it locally.
+  - Why not a `BYPASSRLS` system role: `setup()` and alembic need the owner for
+    DDL, and granting `BYPASSRLS` needs a superuser (awkward on managed Postgres).
+  - Alembic sets the flag for the migration connection, so data migrations see rows.
+- **Requirement: the policy names the server's login role** (`--app-role`, default
+  the connecting role). Log in as another role and every system-scope job
+  (reaper, TTL sweeper, cron claim) sees zero rows. A superuser login bypasses
+  RLS altogether; the regular E2E stack does that (postgres image default).
+  `tests/e2e/test_tenant_rls/test_force_rls_owner_e2e.py` covers the
+  non-superuser owner; the server path was verified manually (2026-09-30): full
+  E2E plus cron firing, lease reaper recovery and TTL sweeping.
 - Policies read `NULLIF(current_setting('aegra.tenant_id', true), '')`. The
   NULLIF matters: a pooled connection that ever set the GUC reports `''`
   afterwards, and `'' = ''` would match untagged rows.
@@ -117,6 +152,11 @@ Alembic adds nullable `tenant_id` columns and indexes only. Roles, NOT NULL,
 defaults and policies live in `core/tenant_rls.py::enable_tenant_rls`, run by the
 operator (`aegra db enable-tenant-rls`), because LangGraph creates its tables in
 `setup()` after alembic runs, and because flag-off installs must stay unaffected.
+
+- Tables are schema-qualified. The schema is `--schema`, else the DDL connection's
+  `current_schema()`; the tenant role gets `USAGE` on it (`PUBLIC` has it only on `public`).
+- Every table below with a policy also gets `FORCE ROW LEVEL SECURITY` and the
+  system policy from §4.
 
 | Table group | Policy |
 |-------------|--------|
@@ -205,7 +245,10 @@ the server refuses to start.
   every write (NOT NULL `tenant_id` it cannot fill). Do not flip the flag back.
 - Step 3 is idempotent (DROP ... IF EXISTS before each CREATE). Re-run it after
   enabling semantic search.
-- New databases only. There is no backfill for rows without `tenant_id`.
+- Rows without `tenant_id` stop step 3 before any change (`UntaggedRowsError`, counts per
+  table). `--assign-existing-to T` tags them all as `T` in one transaction first; store rows
+  are copied under `aegra_tenant.T.`, `store_vectors` repointed (its FK has no ON UPDATE),
+  then the old rows deleted. Shared system assistants are left alone.
 - Switching the flag with Redis on: replay buffers live 600 s. Events written
   before the switch fail to decode after it. Drain runs, wait 600 s, then switch.
 
@@ -213,12 +256,11 @@ the server refuses to start.
 
 ## 9. Deliberately NOT implemented (don't chase these as bugs)
 
-- **Tenant registry.** `resolve_tenant_id` checks presence and format of
-  `org_id`, not that the tenant exists or is active. Open question: core table
-  vs. a resolver hook with the registry in a separate package.
+- **Tenant registry itself.** Only the hook (`configure_tenant_resolver`) exists;
+  the default checks presence and format of `org_id`, not that the tenant exists
+  or is active. The registry lives in a separate package (decided 2026-09-30).
 - **KMS key provider.** Only the hook exists.
-- **FORCE ROW LEVEL SECURITY.** System scope relies on owner bypass (§4).
-- **Backfill / migrating an existing install.**
+- **Splitting an existing install across tenants.** Only single-tenant assignment exists.
 - **Plaintext tolerance during a flag switch.** Rejected: new deployments only.
 - **Isolation in the in-memory broker.** Single process, never leaves memory.
 
@@ -235,7 +277,8 @@ the server refuses to start.
 | `violates check constraint "aegra_tenant_shared_rows_are_system"` | Insert without `tenant_id` into `assistant` outside the system user — usually a test seeding rows directly |
 | `null value in column "tenant_id"` | Flag off after enable (§8), or a write under system scope into a tenant table |
 | 404 for a thread id you know exists | It belongs to another tenant (by design) |
-| System jobs see nothing | Login role does not own the tables (§4) |
+| System jobs see nothing | The server logs in as a role other than the one named by `--app-role` at enable (§4) |
+| Owner sees no rows in `psql` | By design (FORCE). Use a superuser, or `SELECT set_config('aegra.system', 'on', false)` as the login role |
 | `Skipping cron with a malformed tenant_id` | Legacy row from before id validation; fix or delete the row |
 
 ---
@@ -250,7 +293,7 @@ the server refuses to start.
 | Unit — cron | `tests/unit/test_services/test_cron_scheduler.py` (malformed tenant skip) |
 | Unit — CLI | `libs/aegra-cli/tests/test_db_tenant_rls.py` |
 | Integration | `tests/integration/test_api/test_threads_tenant_scope.py` |
-| E2E real DB, no server | `tests/e2e/test_tenant_rls/test_metadata_tenant_rls.py`, `test_langgraph_tenant_rls.py` (throwaway Postgres) |
+| E2E real DB, no server | `tests/e2e/test_tenant_rls/test_metadata_tenant_rls.py`, `test_langgraph_tenant_rls.py` (`public` and a custom schema), `test_force_rls_owner_e2e.py` (non-superuser owner, FORCE) |
 | E2E server | `tests/e2e/test_tenant_rls/test_tenant_rls_api_e2e.py` with `docker-compose.tenant-rls.yml` (header-trusting test auth, test-only Redis key) and `AEGRA_E2E_TENANT_RLS=1`; the Redis test is `prod_only` |
 
 Known E2E noise on the RLS stack, not regressions: `test_store::test_org_prefix_without_org_membership_is_forbidden`

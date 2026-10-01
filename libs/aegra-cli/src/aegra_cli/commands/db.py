@@ -273,7 +273,23 @@ def history(verbose: bool) -> None:
         "(e.g. a superuser). It is granted the tenant role (default: the connecting role)."
     ),
 )
-def enable_tenant_rls(app_role: str | None) -> None:
+@click.option(
+    "--schema",
+    default=None,
+    help="Schema holding Aegra's tables (default: current_schema() from the search_path).",
+)
+@click.option(
+    "--assign-existing-to",
+    default=None,
+    metavar="TENANT",
+    help=(
+        "Give every row that has no tenant yet to TENANT (upgrading a single-tenant install). "
+        "Without it, such rows stop the command before anything changes."
+    ),
+)
+def enable_tenant_rls(
+    app_role: str | None, schema: str | None, assign_existing_to: str | None
+) -> None:
     """Turn on PostgreSQL row-level security for tenant isolation.
 
     Run once after the server has started with AEGRA_TENANT_RLS_ENABLED=true
@@ -293,6 +309,7 @@ def enable_tenant_rls(app_role: str | None) -> None:
     )
 
     # Imported here so settings read the .env loaded by the db group — see module docstring.
+    from aegra_api.core.tenant_rls import UntaggedRowsError
     from aegra_api.core.tenant_rls import enable_tenant_rls as apply_tenant_rls
     from aegra_api.settings import settings
 
@@ -306,7 +323,7 @@ def enable_tenant_rls(app_role: str | None) -> None:
 
     tenant_role = settings.tenant.AEGRA_TENANT_DB_ROLE
 
-    async def run() -> str:
+    async def run() -> tuple[str, str]:
         async with await psycopg.AsyncConnection.connect(
             settings.db.database_url_sync, autocommit=True
         ) as conn:
@@ -315,11 +332,27 @@ def enable_tenant_rls(app_role: str | None) -> None:
                 cur = await conn.execute("SELECT current_user")
                 row = await cur.fetchone()
                 login_role = str(row[0]) if row else None
-            await apply_tenant_rls(conn, tenant_role, app_login_role=login_role)
-            return login_role or ""
+            covered = await apply_tenant_rls(
+                conn,
+                tenant_role,
+                app_login_role=login_role,
+                schema=schema,
+                assign_existing_to=assign_existing_to,
+            )
+            return login_role or "", covered
 
     try:
-        login_role = asyncio.run(run())
+        login_role, covered_schema = asyncio.run(run())
+    except UntaggedRowsError as e:
+        console.print(f"\n[bold red]Error:[/bold red] nothing was changed: {e}.")
+        console.print(
+            "Existing data needs a tenant. For a single-tenant install, re-run with "
+            "[cyan]--assign-existing-to <tenant id>[/cyan] (stop the server first)."
+        )
+        sys.exit(1)
+    except ValueError as e:
+        console.print(f"\n[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
     except psycopg.errors.UndefinedTable as e:
         console.print(
             f"\n[bold red]Error:[/bold red] {e.diag.message_primary}. "
@@ -335,5 +368,5 @@ def enable_tenant_rls(app_role: str | None) -> None:
 
     console.print(
         f"\n[bold green]Tenant RLS enabled.[/bold green] Tenant role [cyan]{tenant_role}[/cyan] "
-        f"granted to [cyan]{login_role}[/cyan]."
+        f"granted to [cyan]{login_role}[/cyan] (schema [cyan]{covered_schema}[/cyan])."
     )

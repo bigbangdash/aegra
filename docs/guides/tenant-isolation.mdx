@@ -6,7 +6,7 @@ description: "Isolate tenants at the database level with PostgreSQL row-level se
 With `AEGRA_TENANT_RLS_ENABLED=true`, every request and background run acts for exactly one tenant, and PostgreSQL row-level security (RLS) rejects rows that belong to another tenant. A bug that forgets a `WHERE` clause returns nothing instead of another tenant's data.
 
 <Warning>
-This feature is experimental. It protects against application bugs that cross tenant boundaries. It does not protect against a compromised server process, which holds the database credentials and the Redis key.
+This feature is experimental. It protects against application bugs that cross tenant boundaries. It does not protect against a compromised server process, which holds the database credentials and the Redis key. Graph code runs in that same process, so it is trusted too: a graph can read those credentials. Only deploy graphs you trust.
 </Warning>
 
 ## What is isolated
@@ -21,6 +21,25 @@ This feature is experimental. It protects against application bugs that cross te
 ## Where the tenant comes from
 
 The tenant is the authenticated user's `org_id`, set by your [auth handler](/guides/authentication) from a verified identity. Clients cannot choose it. Requests from a user without an `org_id`, or with one that does not match `^[A-Za-z0-9_-]{1,64}$`, get `403`.
+
+To check tenants against a registry (known and active tenants), or to derive the tenant from something other than `org_id`, install a resolver at import time, for example from the module your auth handler lives in:
+
+```python
+from aegra_api.core.tenant import TenantRejectedError, configure_tenant_resolver, org_id_tenant_resolver
+from aegra_api.models.auth import User
+
+
+async def registry_resolver(user: User) -> str:
+    tenant_id = await org_id_tenant_resolver(user)  # the default: org_id, or rejected
+    if not await my_registry.is_active(tenant_id):  # your lookup; cache it, it runs per request
+        raise TenantRejectedError(f"tenant {tenant_id} is inactive")
+    return tenant_id
+
+
+configure_tenant_resolver(registry_resolver)
+```
+
+The resolver runs on every request, when a queued run starts, and when a cron fires. Its result is validated against the same pattern. A rejected tenant gets `403` on requests; its queued runs end with status `error`; its crons skip that occurrence and stay enabled, so they resume if the tenant is reactivated.
 
 ## Setup
 
@@ -40,19 +59,29 @@ The tenant is the authenticated user's `org_id`, set by your [auth handler](/gui
     ```bash
     aegra db enable-tenant-rls
     ```
-    Run it as the role the server logs in as, or as a superuser with `--app-role <server login role>`. It creates the tenant role and grants it to that login role. It is safe to re-run.
+    Run it as the role the server logs in as, or as a superuser with `--app-role <server login role>`. It creates the tenant role, grants it to that login role, and makes that login role the only one allowed to act for the system. It is safe to re-run.
+
+    Tables outside `public` are covered too: the schema defaults to the connection's `search_path`, or pass `--schema <name>`.
   </Step>
 </Steps>
 
-Start with a new database. Existing rows have no `tenant_id`, and there is no backfill.
+### Upgrading an existing install
+
+Rows written before RLS have no `tenant_id`. `aegra db enable-tenant-rls` counts them per table and stops before changing anything. For a single-tenant install, stop the server and hand all of them to one tenant:
+
+```bash
+aegra db enable-tenant-rls --assign-existing-to <tenant id>
+```
+
+This tags every existing row with that tenant in one transaction and moves store items under that tenant's namespace (with their semantic-search vectors). Shared assistants from `aegra.json` stay shared. Splitting existing data across several tenants is not supported: that needs a mapping only you know, applied in SQL before enabling.
 
 <Note>
-The server's login role must own the tables, which is the default when the server creates them through migrations. Background jobs such as the lease reaper and the thread TTL sweeper run as that role across all tenants and rely on the owner not being subject to RLS. If the login role does not own the tables and lacks `BYPASSRLS`, those jobs see no rows.
+The tables use `FORCE ROW LEVEL SECURITY`, so even the server's login role, which owns them, sees no rows unless the code declared a scope. Background jobs such as the lease reaper, the thread TTL sweeper and the cron scheduler run across all tenants through a policy that admits only the login role named at enable time. If the server later logs in as a different role, re-run `aegra db enable-tenant-rls --app-role <that role>`, or those jobs see no rows. No superuser or `BYPASSRLS` is needed at runtime. A superuser login bypasses RLS entirely, so do not run the server as one.
 </Note>
 
 ## Operational notes
 
-- **Semantic search added later.** The `store_vectors` table only exists once semantic search is configured. Re-run `aegra db enable-tenant-rls` after enabling it.
+- **Semantic search added later.** The `store_vectors` table only exists once semantic search is configured. Re-run `aegra db enable-tenant-rls` after enabling it. Until you do, store writes that embed fail with a permission error and write nothing, so no vector is ever stored outside RLS.
 - **Do not turn the flag off after enabling RLS.** The policies make `tenant_id` required, and a server with the flag off cannot fill it, so writes fail.
 - **Switching the flag with the Redis broker on.** Redis keeps each run's replay buffer for 10 minutes. Events written before the switch fail to decrypt after it (unsealed with the flag on, sealed with it off), and streams reading them stop with an error. Wait until no runs are active, then 10 more minutes, before switching.
 - **Custom key storage.** To keep tenant keys in a KMS instead of deriving them from one master key, call `aegra_api.core.tenant_crypto.configure_key_provider()` at import time, for example from the module your `http.app` points to. The startup check runs before your app's lifespan, so configuring the provider there is too late.
