@@ -13,6 +13,7 @@ import structlog
 from asgi_correlation_id import correlation_id
 from fastapi import HTTPException
 from sqlalchemy import ColumnElement, case, func, literal_column, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegra_api.core.orm import Assistant as AssistantORM
@@ -165,14 +166,19 @@ async def update_thread_metadata(
             "thread_name": thread_name,
         }
 
-        thread_orm = ThreadORM(
-            thread_id=thread_id,
-            status="idle",
-            metadata_json=metadata,
-            user_id=user_id,
+        # thread_pkey is global while the read above is RLS-scoped, so a thread owned
+        # by another tenant looks absent; let the key arbitrate instead of 500ing.
+        created = await session.scalar(
+            pg_insert(ThreadORM)
+            .values(thread_id=thread_id, status="idle", metadata_json=metadata, user_id=user_id)
+            .on_conflict_do_nothing(index_elements=["thread_id"])
+            .returning(ThreadORM.thread_id)
         )
-        session.add(thread_orm)
-        return
+        if created is not None:
+            return
+        thread = await session.scalar(select(ThreadORM).where(ThreadORM.thread_id == thread_id))
+        if thread is None:
+            raise HTTPException(404, f"Thread '{thread_id}' not found")
 
     patches: list[ColumnElement[Any]] = [
         jsonb_patch({"assistant_id": str(assistant_id), "graph_id": graph_id}, "metadata_patch")

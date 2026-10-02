@@ -828,7 +828,7 @@ class TestExecuteWithLease:
         with (
             patch(f"{MODULE}._acquire_and_load", new_callable=AsyncMock, return_value=mock_loaded),
             patch(f"{MODULE}._restore_trace_context"),
-            patch(f"{MODULE}.execute_run", side_effect=long_running_job),
+            patch(f"{MODULE}.execute_run_as_tenant", side_effect=long_running_job),
             patch(f"{MODULE}._heartbeat_loop", new_callable=AsyncMock),
             patch(f"{MODULE}._release_lease", new_callable=AsyncMock),
         ):

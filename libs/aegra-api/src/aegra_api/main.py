@@ -33,6 +33,7 @@ from aegra_api.core.route_merger import (
     merge_exception_handlers,
     merge_lifespans,
 )
+from aegra_api.core.tenancy.crypto import get_key_provider
 from aegra_api.middleware import ContentTypeFixMiddleware, StructLogMiddleware
 from aegra_api.models.errors import AgentProtocolError, get_error_type
 from aegra_api.observability.metrics import setup_prometheus_metrics
@@ -110,6 +111,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     # Initialize Redis broker (if enabled)
     if settings.redis.REDIS_BROKER_ENABLED:
+        if settings.tenant.AEGRA_TENANT_RLS_ENABLED:
+            # Fail at startup rather than on the first event of the first run.
+            get_key_provider()
         try:
             await redis_manager.initialize()
         except (ConnectionError, OSError) as e:

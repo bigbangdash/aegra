@@ -189,6 +189,16 @@ AEGRA_THREAD_TTL='{"strategy": "keep_latest", "default_ttl": 1440, "sweep_interv
 `AEGRA_THREAD_TTL` takes precedence. When set, the `checkpointer.ttl` block in `aegra.json` is ignored entirely and unset fields fall back to their defaults. See the [configuration reference](/reference/configuration#checkpointer) for field semantics.
 </Note>
 
+## Tenant isolation
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AEGRA_TENANT_RLS_ENABLED` | `false` | Scope every request to the authenticated user's tenant (`org_id` unless a resolver is configured) and enforce it with PostgreSQL row-level security. Requires `aegra db enable-tenant-rls` after the first start |
+| `AEGRA_TENANT_DB_ROLE` | `aegra_tenant` | Database role that tenant-scoped connections switch to so RLS policies apply |
+| `AEGRA_TENANT_REDIS_MASTER_KEY` | — | Base64 of 32 random bytes. Per-tenant keys for Redis event payloads are derived from it. Required when RLS and `REDIS_BROKER_ENABLED` are both on |
+
+See the [tenant isolation guide](/guides/tenant-isolation) for setup order and operational notes.
+
 ## Prometheus metrics
 
 | Variable | Default | Description |

@@ -3,7 +3,7 @@ from httpx import AsyncClient
 from langgraph_sdk.errors import PermissionDeniedError
 
 from aegra_api.settings import settings
-from tests.e2e._utils import elog, get_e2e_client
+from tests.e2e._utils import elog, get_e2e_client, on_tenant_rls_stack
 
 
 @pytest.mark.e2e
@@ -76,6 +76,7 @@ async def test_store_search_returns_422_when_limit_exceeds_cap() -> None:
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
+@pytest.mark.skipif(on_tenant_rls_stack(), reason="header auth gives every caller an org_id")
 async def test_org_prefix_without_org_membership_is_forbidden():
     """The anonymous user has no org_id, so the "orgs" prefix is rejected with 403.
 

@@ -3,7 +3,7 @@ import re
 from typing import Annotated
 from urllib.parse import parse_qsl, quote_plus, urlencode
 
-from pydantic import BeforeValidator, Field, computed_field, model_validator
+from pydantic import BeforeValidator, Field, SecretStr, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from aegra_api import __version__
@@ -464,6 +464,22 @@ class EventStreamingSettings(EnvBase):
     FF_V2_EVENT_STREAMING: bool = True
 
 
+class TenantSettings(EnvBase):
+    """PostgreSQL row-level security for tenant isolation.
+
+    Off by default. When on, every LangGraph pool checkout must run inside an
+    explicit tenant or system DB scope (see core.tenancy.scope), and tenant-scoped
+    checkouts switch to AEGRA_TENANT_DB_ROLE so RLS policies apply.
+    """
+
+    AEGRA_TENANT_RLS_ENABLED: bool = False
+    AEGRA_TENANT_DB_ROLE: str = "aegra_tenant"
+    # Base64 of 32 random bytes; per-tenant keys for Redis event payloads are derived from it.
+    # Required when RLS and the Redis broker are both on, unless configure_key_provider() runs
+    # at import time: Aegra's lifespan checks the key before any user lifespan starts.
+    AEGRA_TENANT_REDIS_MASTER_KEY: SecretStr | None = None
+
+
 class Settings:
     """Container object that instantiates all application settings groups."""
 
@@ -478,6 +494,7 @@ class Settings:
         self.cron = CronSettings()
         self.thread_ttl = ThreadTTLSettings()
         self.event_streaming = EventStreamingSettings()
+        self.tenant = TenantSettings()
 
 
 settings = Settings()

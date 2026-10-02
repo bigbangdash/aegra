@@ -16,12 +16,14 @@ would freeze ``settings`` to defaults before the user's .env loads,
 breaking ``aegra db <cmd>`` against any non-default database.
 """
 
+import asyncio
 import sys
 from collections.abc import Callable
 from io import StringIO
 from pathlib import Path
 
 import click
+import psycopg
 import structlog
 from rich.console import Console
 from rich.panel import Panel
@@ -260,3 +262,111 @@ def history(verbose: bool) -> None:
     )
     if output.getvalue():
         console.print(output.getvalue().strip())
+
+
+@db.command("enable-tenant-rls")
+@click.option(
+    "--app-role",
+    default=None,
+    help=(
+        "Login role the server connects as, when running this as a different role "
+        "(e.g. a superuser). It is granted the tenant role (default: the connecting role)."
+    ),
+)
+@click.option(
+    "--schema",
+    default=None,
+    help="Schema holding Aegra's tables (default: current_schema() from the search_path).",
+)
+@click.option(
+    "--assign-existing-to",
+    default=None,
+    metavar="TENANT",
+    help=(
+        "Give every row that has no tenant yet to TENANT (upgrading a single-tenant install). "
+        "Without it, such rows stop the command before anything changes."
+    ),
+)
+def enable_tenant_rls(
+    app_role: str | None, schema: str | None, assign_existing_to: str | None
+) -> None:
+    """Turn on PostgreSQL row-level security for tenant isolation.
+
+    Run once after the server has started with AEGRA_TENANT_RLS_ENABLED=true
+    (so migrations and LangGraph setup have created every table), and again
+    after enabling semantic search (store_vectors). Safe to re-run.
+
+    Example:
+
+        AEGRA_TENANT_RLS_ENABLED=true aegra db enable-tenant-rls
+    """
+    console.print(
+        Panel(
+            "[bold green]Enabling tenant row-level security[/bold green]",
+            title="[bold]Tenant RLS[/bold]",
+            border_style="green",
+        )
+    )
+
+    # Imported here so settings read the .env loaded by the db group — see module docstring.
+    from aegra_api.core.tenancy.rls import UntaggedRowsError
+    from aegra_api.core.tenancy.rls import enable_tenant_rls as apply_tenant_rls
+    from aegra_api.settings import settings
+
+    # The policies make tenant_id NOT NULL; a server with the flag off cannot fill it.
+    if not settings.tenant.AEGRA_TENANT_RLS_ENABLED:
+        console.print(
+            "\n[bold red]Error:[/bold red] AEGRA_TENANT_RLS_ENABLED is not true. "
+            "Enable it for the server first; with it off, writes fail once RLS is on."
+        )
+        sys.exit(1)
+
+    tenant_role = settings.tenant.AEGRA_TENANT_DB_ROLE
+
+    async def run() -> tuple[str, str]:
+        async with await psycopg.AsyncConnection.connect(
+            settings.db.database_url_sync, autocommit=True
+        ) as conn:
+            login_role = app_role
+            if login_role is None:
+                cur = await conn.execute("SELECT current_user")
+                row = await cur.fetchone()
+                login_role = str(row[0]) if row else None
+            covered = await apply_tenant_rls(
+                conn,
+                tenant_role,
+                app_login_role=login_role,
+                schema=schema,
+                assign_existing_to=assign_existing_to,
+            )
+            return login_role or "", covered
+
+    try:
+        login_role, covered_schema = asyncio.run(run())
+    except UntaggedRowsError as e:
+        console.print(f"\n[bold red]Error:[/bold red] nothing was changed: {e}.")
+        console.print(
+            "Existing data needs a tenant. For a single-tenant install, re-run with "
+            "[cyan]--assign-existing-to <tenant id>[/cyan] (stop the server first)."
+        )
+        sys.exit(1)
+    except ValueError as e:
+        console.print(f"\n[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+    except psycopg.errors.UndefinedTable as e:
+        console.print(
+            f"\n[bold red]Error:[/bold red] {e.diag.message_primary}. "
+            "Start the server once so migrations and LangGraph setup create every table, "
+            "then re-run."
+        )
+        sys.exit(1)
+    except psycopg.Error as e:
+        logger.debug("enable-tenant-rls failed", error=str(e))
+        reason = e.diag.message_primary or e
+        console.print(f"\n[bold red]Error:[/bold red] enabling tenant RLS failed: {reason}")
+        sys.exit(1)
+
+    console.print(
+        f"\n[bold green]Tenant RLS enabled.[/bold green] Tenant role [cyan]{tenant_role}[/cyan] "
+        f"granted to [cyan]{login_role}[/cyan] (schema [cyan]{covered_schema}[/cyan])."
+    )

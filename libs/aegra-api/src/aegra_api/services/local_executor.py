@@ -23,7 +23,7 @@ class LocalExecutor(BaseExecutor):
     async def submit(self, job: RunJob) -> None:
         # Deferred import: run_executor imports services that reference
         # the executor singleton, creating a circular chain at module level.
-        from aegra_api.services.run_executor import execute_run
+        from aegra_api.services.tenant_runs import execute_run_as_tenant
 
         trace_ctx = make_run_trace_context(
             job.identity.run_id,
@@ -32,7 +32,7 @@ class LocalExecutor(BaseExecutor):
             job.user.identity,
             extra_metadata=job.run_metadata,
         )
-        task = asyncio.create_task(execute_run(job), context=trace_ctx)
+        task = asyncio.create_task(execute_run_as_tenant(job), context=trace_ctx)
         active_runs[job.identity.run_id] = task
         logger.info(
             "Submitted run to local executor",

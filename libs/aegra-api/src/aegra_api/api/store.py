@@ -11,6 +11,7 @@ from aegra_api.config import load_store_config
 from aegra_api.core.auth_deps import auth_dependency, get_current_user
 from aegra_api.core.auth_handlers import build_auth_context, handle_event
 from aegra_api.core.database import db_manager
+from aegra_api.core.tenancy.resolver import tenant_scope_dependency
 from aegra_api.models import (
     StoreDeleteRequest,
     StoreGetResponse,
@@ -27,7 +28,7 @@ from aegra_api.models.search_limit import effective_search_limit
 
 logger = structlog.get_logger(__name__)
 
-router = APIRouter(tags=["Store"], dependencies=auth_dependency)
+router = APIRouter(tags=["Store"], dependencies=[*auth_dependency, *tenant_scope_dependency])
 
 
 @router.put("/store/items", status_code=204)

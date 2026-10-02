@@ -26,6 +26,7 @@ from aegra_api.core.active_runs import active_runs, explicit_run_cancellations
 from aegra_api.core.orm import Run as RunORM
 from aegra_api.core.orm import _get_session_maker
 from aegra_api.core.redis_manager import redis_manager
+from aegra_api.core.tenancy.scope import system_scope
 from aegra_api.models.run_job import RunJob
 from aegra_api.observability.span_enrichment import merge_run_metadata, set_trace_context
 from aegra_api.services.base_executor import BaseExecutor
@@ -33,9 +34,9 @@ from aegra_api.services.run_executor import (
     _lease_loss_cancellations,
     _shutdown_cancellations,
     _timeout_cancellations,
-    execute_run,
 )
 from aegra_api.services.run_status import finalize_run
+from aegra_api.services.tenant_runs import execute_run_as_tenant
 from aegra_api.settings import settings
 
 logger = structlog.getLogger(__name__)
@@ -152,7 +153,9 @@ class WorkerExecutor(BaseExecutor):
             )
         for idx in range(count):
             name = f"{self._instance_id}-worker-{idx}"
-            task = asyncio.create_task(self._worker_loop(name))
+            # Queue and lease bookkeeping is cross-tenant; execute_run_as_tenant re-scopes each job.
+            with system_scope("worker loop: queue and lease management"):
+                task = asyncio.create_task(self._worker_loop(name))
             self._worker_tasks.append(task)
 
         max_concurrent = count * settings.worker.N_JOBS_PER_WORKER
@@ -194,7 +197,8 @@ class WorkerExecutor(BaseExecutor):
             await asyncio.gather(*self._worker_tasks, return_exceptions=True)
 
         if drained:
-            await _requeue_drained_runs(drained)
+            with system_scope("worker shutdown: requeue drained runs"):
+                await _requeue_drained_runs(drained)
 
         self._worker_tasks.clear()
         self._job_tasks.clear()
@@ -354,7 +358,7 @@ class WorkerExecutor(BaseExecutor):
         )
         # Wrap execute_run in a task so the heartbeat can cancel it on
         # lease loss, preventing double execution by a second worker.
-        job_task = asyncio.create_task(execute_run(loaded.job))
+        job_task = asyncio.create_task(execute_run_as_tenant(loaded.job))
         heartbeat_task = asyncio.create_task(
             _heartbeat_loop(run_id, worker_name, job_task=job_task),
             context=contextvars.copy_context(),
