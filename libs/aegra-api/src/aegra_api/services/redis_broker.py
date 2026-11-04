@@ -24,6 +24,7 @@ from aegra_api.core.redis_manager import redis_manager
 from aegra_api.core.serializers import GeneralSerializer
 from aegra_api.models.enums import RunCancellationAction
 from aegra_api.services.base_broker import REPLAY_RETENTION_SECONDS, BaseBrokerManager, BaseRunBroker
+from aegra_api.services.redis_event_codec import active_run_scope, event_codec, message_is_end
 from aegra_api.settings import settings
 from aegra_api.utils import generate_event_id
 
@@ -105,14 +106,8 @@ class RedisRunBroker(BaseRunBroker):
             logger.warning(f"Attempted to put event {event_id} into finished broker for run {self.run_id}")
             return
 
-        message = json.dumps(
-            {
-                "event_id": event_id,
-                "payload": json.loads(_serialize_payload(payload)),
-            }
-        )
-
         is_end = isinstance(payload, tuple) and len(payload) >= 1 and payload[0] == "end"
+        message = await event_codec().encode(self.run_id, event_id, _serialize_payload(payload), is_end=is_end)
 
         async with self._write_lock:
             # Cache and publish are retried independently so a publish failure
@@ -231,11 +226,11 @@ class RedisRunBroker(BaseRunBroker):
                     continue
                 last_yielded_event_id = event_id
 
-                payload = _deserialize_payload(data["payload"])
+                payload = _deserialize_payload(await event_codec().decode(self.run_id, data))
 
                 yield event_id, payload
 
-                if isinstance(payload, tuple) and len(payload) >= 1 and payload[0] == "end":
+                if message_is_end(data):
                     self._finished = True
                     break
         finally:
@@ -253,8 +248,7 @@ class RedisRunBroker(BaseRunBroker):
             raw_messages = await client.lrange(self._cache_key, -1, -1)  # type: ignore[invalid-await]
             if raw_messages:
                 data = json.loads(raw_messages[0])
-                payload = _deserialize_payload(data["payload"])
-                if isinstance(payload, tuple) and len(payload) >= 1 and payload[0] == "end":
+                if message_is_end(data):
                     self._finished = True
                     return True
         except RedisError as e:
@@ -289,7 +283,7 @@ class RedisRunBroker(BaseRunBroker):
                 continue
             prev_event_id = event_id
 
-            payload = _deserialize_payload(data["payload"])
+            payload = _deserialize_payload(await event_codec().decode(self.run_id, data))
             all_events.append((event_id, payload))
 
             if not found_last:
@@ -488,12 +482,13 @@ class RedisBrokerManager(BaseBrokerManager):
 
         broker = self.get_or_create_broker(run_id)
         if emit_end_event and not broker.is_finished():
-            event_id = await self.allocate_event_id(run_id)
-            await broker.put(event_id, ("end", {"status": "interrupted"}))
-            # Do NOT call cleanup_broker here - execute_run's finally block
-            # owns cleanup.  Leaving the finished broker in _brokers lets
-            # signal_run_cancelled see is_finished() → True and skip the
-            # duplicate end event.
+            with active_run_scope(run_id):
+                event_id = await self.allocate_event_id(run_id)
+                await broker.put(event_id, ("end", {"status": "interrupted"}))
+                # Do NOT call cleanup_broker here - execute_run's finally block
+                # owns cleanup.  Leaving the finished broker in _brokers lets
+                # signal_run_cancelled see is_finished() → True and skip the
+                # duplicate end event.
 
     async def start_cleanup_task(self) -> None:
         """No-op. Redis TTL handles replay buffer expiry."""

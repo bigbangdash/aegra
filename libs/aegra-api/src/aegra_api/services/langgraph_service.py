@@ -31,6 +31,7 @@ from aegra_api.constants import ASSISTANT_NAMESPACE_UUID
 from aegra_api.core.orm import Assistant as AssistantORM
 from aegra_api.core.orm import AssistantVersion as AssistantVersionORM
 from aegra_api.core.orm import get_session
+from aegra_api.core.tenancy.scope import system_scope
 from aegra_api.models.auth import User
 from aegra_api.observability.base import (
     get_tracing_callbacks,
@@ -187,7 +188,8 @@ class LangGraphService:
 
         # Pre-register assistants for each graph using deterministic UUIDs so
         # clients can pass graph_id directly.
-        await self._ensure_default_assistants()
+        with system_scope("startup: sync default assistants from aegra.json"):
+            await self._ensure_default_assistants()
 
     def _load_graph_registry(self) -> None:
         """Load graph definitions from aegra.json"""

@@ -126,6 +126,23 @@ Show version information.
 aegra version
 ```
 
+---
+
+### `aegra db enable-tenant-rls`
+
+Turn on PostgreSQL row-level security for tenant isolation. Run it after the server has started once with `AEGRA_TENANT_RLS_ENABLED=true`. Safe to re-run. See [Tenant isolation](/guides/tenant-isolation).
+
+```bash
+aegra db enable-tenant-rls
+aegra db enable-tenant-rls --app-role aegra_app --assign-existing-to acme
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--app-role` | the connecting role | Role the server logs in as. It is granted the tenant role and is the only role allowed to act for the system |
+| `--schema` | `current_schema()` of the connection | Schema holding Aegra's tables |
+| `--assign-existing-to` | — | Give every row that has no tenant yet to this tenant (single-tenant upgrade). Without it, such rows stop the command before anything changes |
+
 ## When to use each command
 
 | Scenario | Command |

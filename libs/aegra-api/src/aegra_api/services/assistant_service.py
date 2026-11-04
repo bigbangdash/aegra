@@ -219,7 +219,7 @@ class AssistantService(Authenticated):
                 version=1,
             )
             # No conflict target: assistant_pkey, idx_assistant_user_assistant and
-            # idx_assistant_user_graph_config all have to yield the same outcome.
+            # idx_assistant_tenant_user_graph_config all have to yield the same outcome.
             .on_conflict_do_nothing()
             .returning(AssistantORM)
         )
