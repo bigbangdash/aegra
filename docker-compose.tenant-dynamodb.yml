@@ -1,0 +1,54 @@
+# Per-tenant DynamoDB checkpoints (dev-docs/tenant-dynamodb-checkpoints-proposal.md §7).
+# Standalone stack: Postgres 5446 + Redis 6392 + DynamoDB Local 8100, clear of
+# docker-compose.yml (5432/6379/2026) and docker-compose.tenant-rls.yml (5434/6380).
+# The Aegra server runs on the host with the `dynamodb` extra (the image has none):
+#   docker compose -p aegra-wt-dynamodb -f docker-compose.tenant-dynamodb.yml up -d
+#   docker exec aegra-wt-dynamodb-postgres-1 psql -U admin -d postgres -c "CREATE DATABASE aegra_dynamodb"
+#   export AEGRA_CONFIG=aegra.tenant-rls.json AUTH_TYPE=custom AEGRA_TENANT_RLS_ENABLED=true \
+#     AEGRA_CHECKPOINT_BACKEND=dynamodb AEGRA_DYNAMODB_REGION=us-east-1 \
+#     AEGRA_DYNAMODB_ENDPOINT_URL=http://localhost:8100 AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local \
+#     POSTGRES_HOST=localhost POSTGRES_PORT=5446 POSTGRES_USER=admin POSTGRES_PASSWORD=admin \
+#     POSTGRES_DB=aegra_dynamodb REDIS_BROKER_ENABLED=false PORT=2046 SERVER_URL=http://localhost:2046
+#   uv run --package aegra-api uvicorn aegra_api.main:app --port 2046 &   # migrations run at startup
+#   uv run aegra db enable-tenant-rls                                     # once; skips the checkpoint tables
+#   uv run --package aegra-api python scripts/tenant_dynamodb_tables.py tenant-a tenant-b
+#   AEGRA_E2E_TENANT_DYNAMODB=1 uv run --package aegra-api pytest \
+#     libs/aegra-api/tests/e2e/test_tenant_rls/test_tenant_dynamodb_e2e.py -v
+#   docker compose -p aegra-wt-dynamodb -f docker-compose.tenant-dynamodb.yml down
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: postgres
+    ports:
+      - "5446:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6392:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    # One in-memory shared db: every access key sees the same tables, nothing survives a restart.
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports:
+      - "8100:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/ || [ $$? -eq 22 ]"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

@@ -25,15 +25,22 @@ from psycopg import AsyncConnection, sql
 from aegra_api.core.tenancy.pool import SYSTEM_SETTING, TENANT_SETTING
 from aegra_api.core.tenancy.scope import is_valid_tenant_id
 from aegra_api.core.tenancy.store import TENANT_NAMESPACE_ROOT
+from aegra_api.settings import settings
 
 METADATA_TENANT_TABLES: tuple[str, ...] = ("thread", "runs", "crons")
-LANGGRAPH_TENANT_TABLES: tuple[str, ...] = (
-    "checkpoints",
-    "checkpoint_blobs",
-    "checkpoint_writes",
-    "store",
-)
+# Owned by AsyncPostgresSaver; absent when AEGRA_CHECKPOINT_BACKEND=dynamodb (never created).
+CHECKPOINT_TABLES: tuple[str, ...] = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
+LANGGRAPH_TENANT_TABLES: tuple[str, ...] = (*CHECKPOINT_TABLES, "store")
 TENANT_TABLES: tuple[str, ...] = METADATA_TENANT_TABLES + LANGGRAPH_TENANT_TABLES
+
+
+def isolated_tables_for_settings() -> tuple[str, ...]:
+    """TENANT_TABLES minus the checkpoint tables when checkpoints live in DynamoDB."""
+    if not settings.checkpoint.dynamodb_enabled:
+        return TENANT_TABLES
+    return tuple(table for table in TENANT_TABLES if table not in CHECKPOINT_TABLES)
+
+
 # Created by store.setup() only when semantic search (an index) is configured.
 OPTIONAL_TENANT_TABLES: tuple[str, ...] = ("store_vectors",)
 # Tenant rows plus read-only shared rows owned by user_id 'system' (tenant_id NULL).
@@ -271,7 +278,7 @@ async def enable_tenant_rls(
     tenant_role: str,
     *,
     app_login_role: str | None = None,
-    tables: Sequence[str] = TENANT_TABLES,
+    tables: Sequence[str] | None = None,
     shared_tables: Sequence[str] = SHARED_TENANT_TABLES,
     child_tables: Mapping[str, tuple[str, str]] = CHILD_TENANT_TABLES,
     grant_only_tables: Sequence[str] = GRANT_ONLY_TABLES,
@@ -285,7 +292,10 @@ async def enable_tenant_rls(
     role). It is granted the tenant role and is the only role the system policy admits.
     Rows without a tenant raise UntaggedRowsError before anything changes, unless
     assign_existing_to names the tenant that takes them all (a single-tenant install).
+    tables defaults to isolated_tables_for_settings() (no checkpoint tables on DynamoDB).
     """
+    if tables is None:
+        tables = isolated_tables_for_settings()
     if not conn.autocommit:
         raise ValueError("enable_tenant_rls needs an autocommit connection (CREATE INDEX CONCURRENTLY)")
     if assign_existing_to is not None and not is_valid_tenant_id(assign_existing_to):

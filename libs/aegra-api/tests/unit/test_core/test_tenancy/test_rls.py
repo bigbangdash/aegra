@@ -5,6 +5,7 @@ import pytest
 from psycopg import sql
 
 from aegra_api.core.tenancy.rls import (
+    CHECKPOINT_TABLES,
     CHILD_TENANT_TABLES,
     GRANT_ONLY_TABLES,
     SHARED_TENANT_TABLES,
@@ -14,7 +15,9 @@ from aegra_api.core.tenancy.rls import (
     build_shared_table_statements,
     build_table_statements,
     enable_tenant_rls,
+    isolated_tables_for_settings,
 )
+from aegra_api.settings import settings
 
 
 def _render(table: str, role: str = "aegra_tenant") -> list[str]:
@@ -348,3 +351,42 @@ async def test_enable_raises_the_system_flag_so_an_owner_rerun_sees_rows() -> No
     await enable_tenant_rls(conn, "aegra_tenant", tables=(), shared_tables=(), child_tables={}, grant_only_tables=())
 
     assert conn.execute.await_args_list[2].args == ("SELECT set_config(%s, 'on', false)", ("aegra.system",))
+
+
+def test_isolated_tables_default_to_every_tenant_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings.checkpoint, "AEGRA_CHECKPOINT_BACKEND", "postgres")
+
+    assert isolated_tables_for_settings() == TENANT_TABLES
+
+
+def test_isolated_tables_leave_out_checkpoint_tables_on_dynamodb(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings.checkpoint, "AEGRA_CHECKPOINT_BACKEND", "dynamodb")
+
+    tables = isolated_tables_for_settings()
+
+    assert set(tables) == set(TENANT_TABLES) - set(CHECKPOINT_TABLES)
+    assert "store" in tables
+    assert set(CHECKPOINT_TABLES) == {"checkpoints", "checkpoint_blobs", "checkpoint_writes"}
+
+
+async def test_enable_skips_checkpoint_tables_on_dynamodb(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings.checkpoint, "AEGRA_CHECKPOINT_BACKEND", "dynamodb")
+    conn = _conn_where_exists(set())
+
+    await enable_tenant_rls(conn, "aegra_tenant", shared_tables=(), child_tables={}, grant_only_tables=())
+
+    rendered = _rendered(conn)
+    assert not any("checkpoint" in s for s in rendered)
+    assert any(s == 'ALTER TABLE "public"."store" ENABLE ROW LEVEL SECURITY' for s in rendered)
+    assert any(s == 'ALTER TABLE "public"."thread" ENABLE ROW LEVEL SECURITY' for s in rendered)
+
+
+async def test_enable_covers_checkpoint_tables_on_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings.checkpoint, "AEGRA_CHECKPOINT_BACKEND", "postgres")
+    conn = _conn_where_exists(set())
+
+    await enable_tenant_rls(conn, "aegra_tenant", shared_tables=(), child_tables={}, grant_only_tables=())
+
+    rendered = _rendered(conn)
+    for table in CHECKPOINT_TABLES:
+        assert any(f'ALTER TABLE "public"."{table}" ENABLE ROW LEVEL SECURITY' == s for s in rendered)

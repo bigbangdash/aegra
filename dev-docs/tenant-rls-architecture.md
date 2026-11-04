@@ -265,6 +265,12 @@ the server refuses to start.
 - **Splitting an existing install across tenants.** Only single-tenant assignment exists.
 - **Plaintext tolerance during a flag switch.** Rejected: new deployments only.
 - **Isolation in the in-memory broker.** Single process, never leaves memory.
+- **Physical separation of checkpoints.** RLS keeps every tenant in the shared
+  `checkpoints*` tables. Plan B (`tenant-dynamodb-checkpoints-proposal.md`,
+  implemented behind `AEGRA_CHECKPOINT_BACKEND=dynamodb`, adoption undecided) moves
+  only the checkpoints to one DynamoDB table per tenant; threads, runs, assistants,
+  crons and the store stay here. With that backend `aegra db enable-tenant-rls`
+  leaves the checkpoint tables out, since they are never created.
 
 ---
 
@@ -297,6 +303,7 @@ the server refuses to start.
 | Integration | `tests/integration/test_api/test_threads_tenant_scope.py` |
 | E2E real DB, no server | `tests/e2e/test_tenant_rls/test_metadata_tenant_rls.py`, `test_langgraph_tenant_rls.py` (`public` and a custom schema), `test_force_rls_owner_e2e.py` (non-superuser owner, FORCE) |
 | E2E server | `tests/e2e/test_tenant_rls/test_tenant_rls_api_e2e.py` with `docker-compose.tenant-rls.yml` (header-trusting test auth, test-only Redis key) and `AEGRA_E2E_TENANT_RLS=1`; the Redis test is `prod_only` |
+| Plan B (DynamoDB checkpoints) | `test_tenancy/test_checkpointer_startup.py`, `test_dynamodb_provider.py`, `test_routing_checkpointer.py`, `test_run_cleanup_scope.py`; `tests/integration/test_health_checkpoint_backend.py`; `tests/e2e/test_tenant_rls/test_tenant_dynamodb_e2e.py` with `docker-compose.tenant-dynamodb.yml` and `AEGRA_E2E_TENANT_DYNAMODB=1` |
 
 Known E2E noise on the RLS stack, not regressions: `test_store::test_org_prefix_without_org_membership_is_forbidden`
 and `test_run_reconciliation_e2e` assume noop auth and seed rows without

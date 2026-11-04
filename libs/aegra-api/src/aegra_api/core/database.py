@@ -3,6 +3,7 @@
 from typing import Any
 
 import structlog
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg.rows import dict_row
@@ -10,6 +11,7 @@ from psycopg_pool import AsyncConnectionPool
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from aegra_api.config import load_store_config
+from aegra_api.core.tenancy.checkpointer import TenantRoutingCheckpointer, build_tenant_checkpointer
 from aegra_api.core.tenancy.pool import TenantScopedConnectionPool
 from aegra_api.core.tenancy.scope import system_scope
 from aegra_api.core.tenancy.store import TenantScopedPostgresStore
@@ -26,7 +28,7 @@ class DatabaseManager:
 
         # Shared pool for LangGraph components (Checkpointer + Store)
         self.lg_pool: AsyncConnectionPool | None = None
-        self._checkpointer: AsyncPostgresSaver | None = None
+        self._checkpointer: AsyncPostgresSaver | TenantRoutingCheckpointer | None = None
         self._store: AsyncPostgresStore | None = None
         self._database_url = settings.db.database_url
 
@@ -82,11 +84,16 @@ class DatabaseManager:
         store_config = load_store_config()
         index_config = store_config.get("index") if store_config else None
 
-        self._checkpointer = AsyncPostgresSaver(conn=self.lg_pool)
+        # Per-tenant DynamoDB tables are provisioned outside the server, so only Postgres gets setup().
+        if settings.checkpoint.dynamodb_enabled:
+            self._checkpointer = build_tenant_checkpointer(settings.checkpoint)
+        else:
+            self._checkpointer = AsyncPostgresSaver(conn=self.lg_pool)
         store_cls = TenantScopedPostgresStore if settings.tenant.AEGRA_TENANT_RLS_ENABLED else AsyncPostgresStore
         self._store = store_cls(conn=self.lg_pool, index=index_config)
         with system_scope("LangGraph schema setup at startup"):
-            await self._checkpointer.setup()  # Ensure tables exist
+            if not settings.checkpoint.dynamodb_enabled:
+                await self._checkpointer.setup()  # Ensure tables exist
             await self._store.setup()  # Ensure tables exist
 
         if index_config:
@@ -111,8 +118,8 @@ class DatabaseManager:
 
         logger.info("✅ Database connections closed")
 
-    def get_checkpointer(self) -> AsyncPostgresSaver:
-        """Return the live AsyncPostgresSaver instance."""
+    def get_checkpointer(self) -> BaseCheckpointSaver:
+        """Return the live checkpointer (AsyncPostgresSaver or the per-tenant router)."""
         if self._checkpointer is None:
             raise RuntimeError("Database not initialized")
         return self._checkpointer
