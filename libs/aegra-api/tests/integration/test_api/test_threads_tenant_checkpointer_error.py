@@ -72,7 +72,7 @@ def _get_graph_raising(exc: Exception) -> MagicMock:
 
 
 @pytest.mark.parametrize("path", ["/threads/thread-1/state", "/threads/thread-1/history"])
-def test_state_routes_pass_the_error_through_instead_of_a_500(path: str) -> None:
+def test_state_routes_pass_the_error_through_instead_of_a_500(path: str, monkeypatch: pytest.MonkeyPatch) -> None:
     thread = DummyThread("thread-1", "idle", {"graph_id": "stress_test"}, "test-user")
     thread.metadata_json = {"graph_id": "stress_test"}
 
@@ -80,6 +80,12 @@ def test_state_routes_pass_the_error_through_instead_of_a_500(path: str) -> None
         async def scalar(self, _stmt: object) -> object:
             return thread
 
+    @asynccontextmanager
+    async def open_session() -> AsyncIterator[ThreadSession]:
+        yield ThreadSession()
+
+    # State and history resolve graph_id on their own short-lived session, not the request dependency.
+    monkeypatch.setattr(threads_module, "_get_session_maker", lambda: open_session)
     app = create_test_app(include_runs=False, include_threads=True)
     app.add_exception_handler(TenantCheckpointerError, tenant_checkpointer_exception_handler)
     app.dependency_overrides[core_get_session] = override_get_session_dep(ThreadSession)

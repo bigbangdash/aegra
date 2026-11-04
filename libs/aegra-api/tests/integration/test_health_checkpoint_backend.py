@@ -78,7 +78,8 @@ def test_ready_is_503_when_the_provider_fails(provider: FakeProvider) -> None:
     response = client.get("/ready")
 
     assert response.status_code == 503
-    assert "sts unreachable" in response.json()["detail"]
+    assert provider.health_calls == 1
+    assert "sts unreachable" not in response.text
 
 
 def test_ready_passes_when_the_provider_is_healthy(provider: FakeProvider) -> None:
